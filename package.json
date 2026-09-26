@@ -1,0 +1,31 @@
+{
+  "name": "mapimator",
+  "version": "0.1.0",
+  "description": "Animate multiple GPX tracks simultaneously on a switchable OpenStreetMap basemap",
+  "license": "MIT",
+  "author": "Johannes Mueller <github@johannes-mueller.org>",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node e2e/run.mjs",
+    "test:all": "npm run typecheck && npm run test && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "maplibre-gl": "^6.11.2"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}

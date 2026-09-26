@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta
+            name="description"
+            content="Animate multiple GPX tracks simultaneously on a switchable OpenStreetMap basemap."
+        />
+        <title>Mapimator</title>
+    </head>
+    <body>
+        <div id="map" aria-label="Map"></div>
+
+        <header id="topbar">
+            <h1 class="wordmark">Mapimator</h1>
+            <nav id="basemap-switcher" aria-label="Basemap"></nav>
+        </header>
+
+        <aside id="sidebar" aria-label="Tracks">
+            <section id="dropzone-region">
+                <div id="dropzone" aria-disabled="true">
+                    <p class="dz-title">GPX upload</p>
+                    <p class="dz-hint">Drop support arrives in phase 2</p>
+                    <input
+                        id="file-input"
+                        type="file"
+                        accept=".gpx,application/gpx+xml"
+                        multiple
+                        hidden
+                    />
+                </div>
+            </section>
+            <section id="legend-region" aria-label="Track list">
+                <p class="placeholder">Track list arrives in phase 2</p>
+            </section>
+        </aside>
+
+        <section id="chart-region" aria-label="Chart">
+            <p class="placeholder">Chart arrives in phase 5</p>
+        </section>
+
+        <footer id="playback-bar">
+            <div class="transport">
+                <button id="play-toggle" type="button" aria-label="Play" disabled>&#9654;</button>
+                <label class="speed">
+                    <span class="visually-hidden">Speed</span>
+                    <select id="speed-select" disabled>
+                        <option value="1">1&times;</option>
+                        <option value="5">5&times;</option>
+                        <option value="20">20&times;</option>
+                        <option value="60">60&times;</option>
+                        <option value="120">120&times;</option>
+                        <option value="300">300&times;</option>
+                    </select>
+                </label>
+                <span id="clock" class="clock">0:00 / 0:00</span>
+            </div>
+            <input
+                id="timeline"
+                class="timeline"
+                type="range"
+                min="0"
+                max="0"
+                value="0"
+                step="1"
+                disabled
+                aria-label="Playback position"
+            />
+        </footer>
+
+        <script type="module" src="/src/main.ts"></script>
+    </body>
+</html>
