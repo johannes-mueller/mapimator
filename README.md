@@ -58,20 +58,22 @@ The chart and the playback bar are still placeholders, each labelled with the ph
 
 There are two layers, and they answer different questions.
 
-**Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, and formatting. They run in a Node environment with no DOM, so they are fast — the whole suite is well under a second.
+**Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, the E2E harness itself, and formatting. They run in a Node environment with no DOM and need no network, so they are fast — the whole suite takes under a second.
 
-**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline actually changes pixels on the map, and that a 60,000-point file never blocks the main thread. The suite serves `dist/` through `vite preview` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
+**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline actually changes pixels on the map, that `dist/` really works from a subpath, and that a 60,000-point file never blocks the main thread. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
 
-The E2E suite uses the Chromium that Playwright manages, not your system browser, so results do not depend on what you happen to have installed:
+The E2E suite needs **live network access to `tiles.openfreemap.org`** — it renders the real styles and the real tiles, because a recorded snapshot would test the recording rather than the app. It preflights that endpoint before launching a browser, so a connectivity problem reports itself as an environment problem instead of a 30-second timeout:
 
 ```bash
 npx playwright install chromium   # once
 npm run test:e2e
 ```
 
-The e2e checks assert real values — exact point counts, exact segment-break indices, exact decoded names, expected mean luma per basemap style — rather than merely asserting that nothing threw. Screenshots from the runs land in the system temp directory for inspection when a check fails.
+The e2e checks assert real values — exact point counts, exact segment-break indices, exact decoded names, expected mean luma per basemap style, exact asset-URL shapes — rather than merely asserting that nothing threw. Screenshots from the runs land in the system temp directory for inspection when a check fails.
 
 `npm run test:all` runs the whole chain in the order you would want it: types, then unit tests, then a build, then the end-to-end checks against that build.
+
+Contributors should read [`AGENTS.md`](AGENTS.md): every claim of correctness belongs in this suite, written with the feature rather than after it, and no behaviour is done until a check for it exists and passes.
 
 ## How GPX files are read
 
@@ -93,7 +95,7 @@ A file with no `<time>` elements is still usable: timestamps are synthesised fro
 
 `dist/` is a plain static directory — host it anywhere: GitHub Pages, Cloudflare Pages, Netlify, S3, nginx, or a local file server.
 
-`vite.config.ts` sets `base: './'`, so all asset URLs are **relative**. The build therefore works unchanged from a domain root _or_ a subpath, which is what GitHub Pages project sites (`https://user.github.io/mapimator/`) need. No rewrite rules required.
+`vite.config.ts` sets `base: './'`, so all asset URLs are **relative**. The build therefore works unchanged from a domain root _or_ a subpath, which is what GitHub Pages project sites (`https://user.github.io/mapimator/`) need. No rewrite rules required. This is checked, not just asserted: `e2e/subpath.spec.mjs` serves the built `dist/` under a `/mapimator/` prefix with a server that refuses to answer outside it, so a regression to an absolute `base` turns every asset into a 404.
 
 Two deployment notes:
 
@@ -111,8 +113,9 @@ Adding or removing a basemap means editing one array in `src/map/basemaps.ts`. E
 ```
 index.html                    application shell markup
 vite.config.ts                build config (relative base, es2022, ES workers)
-vitest.config.ts              unit test config (src/**/*.test.ts, Node env)
+vitest.config.ts              unit test config (src/**, e2e/harness.test.mjs, Node env)
 tsconfig.json                 strict TypeScript, bundler module resolution
+AGENTS.md                     working agreements, including the verification rule
 .prettierrc                   formatter settings
 .editorconfig                 indentation rules for editors that support it
 public/favicon.svg
@@ -144,14 +147,16 @@ src/
     legend.ts                 track list
   format.test.ts
 e2e/
-  run.mjs                     orchestrator: build check, server, specs, summary
-  harness.mjs                 suite reporter, vite preview, bundled Chromium
+  run.mjs                     orchestrator: preflight, server, specs, summary
+  harness.mjs                 reporter, pixel helpers, servers, bundled Chromium
+  harness.test.mjs            the harness's own logic, under unit test
   make-fixtures.mjs           GPX fixtures, written only when a spec asks for them
   basemap.spec.mjs            shell, basemap switching, overlays, persistence
+  subpath.spec.mjs            dist/ served from a subpath, as a project site is
   tracks.spec.mjs             parsing, geometry, gaps, errors, large file
 ```
 
-`e2e/*.spec.mjs` files are picked up automatically, so adding a spec needs no edit to the runner. A spec may export a `fixtures` list naming the GPX files it loads; only those are written to disk, so a spec that loads no GPX writes nothing.
+`e2e/*.spec.mjs` files are picked up automatically, so adding a spec needs no edit to the runner. A spec may export a `fixtures` list naming the GPX files it loads; only those are written to disk, so a spec that loads no GPX writes nothing. The fixture directory is emptied before each run, so a file left behind by an earlier run can never stand in for one that has stopped being generated.
 
 ## Code style
 

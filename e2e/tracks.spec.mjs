@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { SHOT_DIR } from './harness.mjs';
+import { SHOT_DIR, countDifferent, regionPixels } from './harness.mjs';
 
 const MAP_REGION = { x: 400, y: 150, w: 700, h: 400 };
 
@@ -67,37 +67,6 @@ const load = async (page, dir, ...names) => {
     );
     // One more frame so the redraw from the store subscription has landed.
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
-};
-
-const regionPixels = async (page) => {
-    const png = (await page.screenshot()).toString('base64');
-    return page.evaluate(
-        async ({ png, region }) => {
-            const img = new Image();
-            img.src = `data:image/png;base64,${png}`;
-            await img.decode();
-            const off = new OffscreenCanvas(region.w, region.h);
-            const ctx = off.getContext('2d');
-            ctx.drawImage(img, region.x, region.y, region.w, region.h, 0, 0, region.w, region.h);
-            return Array.from(ctx.getImageData(0, 0, region.w, region.h).data);
-        },
-        { png, region: MAP_REGION },
-    );
-};
-
-/** Counts pixels that differ between two screenshots of the same region. */
-const countDifferent = (a, b, threshold = 8) => {
-    let n = 0;
-    for (let i = 0; i < a.length; i += 4) {
-        if (
-            Math.abs(a[i] - b[i]) > threshold ||
-            Math.abs(a[i + 1] - b[i + 1]) > threshold ||
-            Math.abs(a[i + 2] - b[i + 2]) > threshold
-        ) {
-            n += 1;
-        }
-    }
-    return n;
 };
 
 /** Every GPX fixture this spec loads through the real file input. */
@@ -203,11 +172,11 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     suite.section('POLYLINE ACTUALLY PAINTS');
     // Compare with the camera held still: the map has already fitted itself to
     // the track, so the only thing that can change the pixels is the overlay.
-    const withTrack = await regionPixels(page);
+    const withTrack = await regionPixels(page, MAP_REGION);
     await page.locator('.legend-remove').first().click();
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
     await page.waitForTimeout(600);
-    const withoutTrack = await regionPixels(page);
+    const withoutTrack = await regionPixels(page, MAP_REGION);
     const changed = countDifferent(withTrack, withoutTrack);
     suite.check('removing the track changes the map pixels', changed > 300, `${changed} px differ`);
     // Put it back for the checks that follow.

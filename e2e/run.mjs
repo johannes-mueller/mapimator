@@ -1,9 +1,16 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { FIXTURE_DIR, Suite, ensureDirs, launchBrowser, startPreview } from './harness.mjs';
+import {
+    FIXTURE_DIR,
+    Suite,
+    ensureDirs,
+    launchBrowser,
+    preflight,
+    startPreview,
+} from './harness.mjs';
 import { writeFixtures } from './make-fixtures.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -35,10 +42,14 @@ async function main() {
         console.error('No *.spec.mjs files found in e2e/.');
         return 1;
     }
+    // Start from an empty directory, so a fixture left behind by an earlier run
+    // cannot stand in for one the registry no longer builds. A spec that loads
+    // a file it did not declare should fail, not quietly pass on a stale copy.
+    rmSync(FIXTURE_DIR, { recursive: true, force: true });
     const wanted = [...new Set(specs.flatMap((s) => s.mod.fixtures ?? []))];
-    if (wanted.length > 0) {
-        writeFixtures(FIXTURE_DIR, wanted);
-    }
+    writeFixtures(FIXTURE_DIR, wanted);
+
+    await preflight();
 
     const preview = await startPreview(ROOT);
     console.log(`serving dist/ at ${preview.url}`);
@@ -70,6 +81,7 @@ async function main() {
                     errors,
                     url: preview.url,
                     fixtures: FIXTURE_DIR,
+                    root: ROOT,
                 });
             } catch (error) {
                 suite.check(

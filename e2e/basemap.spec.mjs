@@ -1,4 +1,4 @@
-import { SHOT_DIR } from './harness.mjs';
+import { SHOT_DIR, analyzeRegion } from './harness.mjs';
 
 const MAP_REGION = { x: 380, y: 130, w: 620, h: 360 };
 const STYLES = [
@@ -8,36 +8,6 @@ const STYLES = [
     { label: 'Fiord', dark: false },
     { label: 'Dark', dark: true },
 ];
-
-/** Counts distinct colours and mean luma in a screen region. */
-async function analyze(page, region) {
-    const png = (await page.screenshot()).toString('base64');
-    return page.evaluate(
-        async ({ png, region }) => {
-            const img = new Image();
-            img.src = `data:image/png;base64,${png}`;
-            await img.decode();
-            const off = new OffscreenCanvas(region.w, region.h);
-            const ctx = off.getContext('2d');
-            ctx.drawImage(img, region.x, region.y, region.w, region.h, 0, 0, region.w, region.h);
-            const { data } = ctx.getImageData(0, 0, region.w, region.h);
-            const counts = new Map();
-            let luma = 0;
-            for (let i = 0; i < data.length; i += 4) {
-                const key = `${data[i]},${data[i + 1]},${data[i + 2]}`;
-                counts.set(key, (counts.get(key) ?? 0) + 1);
-                luma += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
-            }
-            const total = data.length / 4;
-            return {
-                exactColors: counts.size,
-                dominantShare: Number((Math.max(...counts.values()) / total).toFixed(3)),
-                meanLuma: Number((luma / total).toFixed(1)),
-            };
-        },
-        { png, region },
-    );
-}
 
 /** This spec drives only the shell and the basemap switcher, so it loads no GPX. */
 export const fixtures = [];
@@ -146,7 +116,7 @@ export async function run({ page, suite, errors, url }) {
             };
         });
 
-        const px = await analyze(page, MAP_REGION);
+        const px = await analyzeRegion(page, MAP_REGION);
         suite.note(
             `${style.label.padEnd(9)} layers=${String(state.layerCount).padStart(3)} ` +
                 `colors=${String(px.exactColors).padStart(5)} luma=${String(px.meanLuma).padStart(5)} ` +
