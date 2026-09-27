@@ -91,7 +91,7 @@ const legend = createLegend(
     {
         // The per-track numbers come from the transport, which owns the clock,
         // rather than from a second copy of it here.
-        getTrackTime: (track) => transport.getTrackTime(track),
+        getElapsedMs: () => transport.getElapsedMs(),
         readout: readoutText,
     },
 );

@@ -4,7 +4,7 @@ export const MIN_SPEED = 1;
 export const MAX_SPEED = 300;
 
 export interface PlaybackClock {
-    /** Replaces the track set and recomputes the shared origin and total span. */
+    /** Replaces the track set and recomputes how long the run lasts. */
     setTracks: (tracks: readonly Track[]) => void;
     play: () => void;
     pause: () => void;
@@ -22,25 +22,23 @@ export interface PlaybackClock {
     getTotalMs: () => number;
     getSpeed: () => number;
     setSpeed: (multiplier: number) => void;
-    /** The shared elapsed time projected onto one track's own timeline. */
-    getTrackTime: (track: Track) => number;
     isTrackDone: (track: Track) => boolean;
     subscribe: (listener: (elapsedMs: number) => void) => () => void;
 }
 
 /**
- * One clock drives every track.
+ * One clock drives every track, measured from each track's own first point.
  *
- * Tracks are recorded independently, so two rides can start hours apart. Rather
- * than aligning them, each track keeps its own `t0` and the clock's shared
- * elapsed time is projected onto it as `elapsed - (t0 - earliestT0)`. A track
- * whose offset has not been reached yet reports a negative local time, which is
- * what lets several recordings run side by side instead of being forced into
- * step.
+ * Two rides of the same course are rarely recorded at the same moment, so their
+ * timestamps differ by however long it took to do them twice. This clock ignores
+ * that: every track is read against the shared elapsed time directly, so all the
+ * markers start together at the start line and at elapsed ten minutes you are
+ * looking at where each ride was ten minutes in. `t0` is not discarded — the
+ * legend shows how far after the first ride each one began — it just does not
+ * decide what the playhead means.
  */
 export function createPlaybackClock(): PlaybackClock {
     let tracks: readonly Track[] = [];
-    let origin = 0;
     let totalMs = 0;
     let elapsedMs = 0;
     let playing = false;
@@ -49,21 +47,12 @@ export function createPlaybackClock(): PlaybackClock {
     const listeners = new Set<(elapsedMs: number) => void>();
 
     const recompute = (): void => {
-        if (tracks.length === 0) {
-            origin = 0;
-            totalMs = 0;
-            return;
-        }
-        // Two passes: the span depends on the earliest t0, which is only known
-        // once every track has been seen.
-        let earliest = Infinity;
-        for (const track of tracks) {
-            earliest = Math.min(earliest, track.t0);
-        }
-        origin = earliest;
+        // The run lasts as long as the longest ride in it. Every track is read
+        // from its own start, so a short ride simply finishes early and waits,
+        // and an empty set leaves nothing to run.
         let latest = 0;
         for (const track of tracks) {
-            latest = Math.max(latest, track.t0 - origin + track.durationMs);
+            latest = Math.max(latest, track.durationMs);
         }
         totalMs = latest;
     };
@@ -92,22 +81,20 @@ export function createPlaybackClock(): PlaybackClock {
 
     return {
         setTracks: (next) => {
-            const previousOrigin = origin;
             const previousElapsed = elapsedMs;
             tracks = [...next];
             recompute();
-            if (tracks.length > 0 && origin === previousOrigin) {
-                // The origin is what defines every track's local time, so if it
-                // has not moved the elapsed time is still meaningful. Adding or
-                // removing a track that does not redefine "earliest" should not
-                // interrupt a run in progress.
+            if (tracks.length > 0) {
+                // Changing the set never moves any marker, because each track is
+                // read against the shared elapsed time and nothing about that
+                // depends on which other tracks are loaded. So the playhead stays
+                // where the user left it, clamped down if the new set is shorter
+                // than the position they were at.
                 setElapsed(previousElapsed);
                 return;
             }
-            // Either the origin moved, which means every track's offset changed
-            // and the old elapsed time no longer refers to the same moment, or
-            // the set is empty and there is no timeline left to run. Reset and
-            // stop rather than silently teleporting every marker.
+            // An empty store has no timeline left to run, so reset and stop
+            // rather than leaving a playhead stranded against a total of zero.
             playing = false;
             lastNow = null;
             setElapsed(0);
@@ -164,9 +151,7 @@ export function createPlaybackClock(): PlaybackClock {
             speed = Math.min(Math.max(multiplier, MIN_SPEED), MAX_SPEED);
         },
 
-        getTrackTime: (track) => elapsedMs - (track.t0 - origin),
-
-        isTrackDone: (track) => elapsedMs - (track.t0 - origin) >= track.durationMs,
+        isTrackDone: (track) => elapsedMs >= track.durationMs,
 
         subscribe: (listener) => {
             listeners.add(listener);

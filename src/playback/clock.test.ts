@@ -220,42 +220,44 @@ describe('createPlaybackClock', () => {
     });
 
     describe('the shared clock across tracks', () => {
-        it('spans every track, including the later ones', () => {
+        it('lasts as long as the longest ride, whatever the timestamps say', () => {
+            // Two 10-minute rides an hour apart: the run is ten minutes, because
+            // each is measured from its own start and the hour between them is
+            // not part of either ride.
             const clock = clockWith([track(0, 600_000), track(2 * HOUR, 600_000)]);
-            expect(clock.getTotalMs()).toBe(2 * HOUR + 600_000);
+            expect(clock.getTotalMs()).toBe(600_000);
         });
 
-        it('uses the earliest t0 as the shared origin, not the first added', () => {
-            // The later ride is added first, so "first" and "earliest" differ and
-            // picking the wrong one would give it a negative span.
-            const late = track(2 * HOUR, 60_000);
-            const early = track(0, 60_000);
+        it('reads every track against the same elapsed time', () => {
+            // The later ride is added first, so "first" and "earliest" differ.
+            // Neither order nor t0 may decide what the playhead means.
+            const late = track(2 * HOUR, 600_000);
+            const early = track(0, 600_000);
             const clock = clockWith([late, early]);
-            expect(clock.getTotalMs()).toBe(2 * HOUR + 60_000);
-            clock.seek(0);
-            expect(clock.getTrackTime(early)).toBe(0);
-            expect(clock.getTrackTime(late)).toBe(-2 * HOUR);
+            expect(clock.getTotalMs()).toBe(600_000);
+            clock.seek(120_000);
+            expect(clock.getElapsedMs()).toBe(120_000);
+            expect(clock.isTrackDone(early)).toBe(false);
+            expect(clock.isTrackDone(late)).toBe(false);
         });
 
-        it('gives a later track a negative local time until its offset passes', () => {
-            // This is the whole point of the shared clock: a ride recorded two
-            // hours later has not started yet at shared time zero, rather than
-            // being yanked into step with the first one.
-            const early = track(0, 60_000);
-            const late = track(2 * HOUR, 60_000);
+        it("starts every marker together, at each ride's own first point", () => {
+            // This is the whole point: a ride recorded two hours later is at
+            // shared time zero exactly where the first one is, so at elapsed
+            // 10:00 you are looking at where each ride was ten minutes in.
+            const early = track(0, 600_000);
+            const late = track(2 * HOUR, 600_000);
             const clock = clockWith([early, late]);
             clock.seek(0);
-            expect(clock.getTrackTime(early)).toBe(0);
-            expect(clock.getTrackTime(late)).toBe(-2 * HOUR);
+            expect(clock.isTrackDone(early)).toBe(false);
             expect(clock.isTrackDone(late)).toBe(false);
-            clock.seek(2 * HOUR);
-            expect(clock.getTrackTime(late)).toBe(0);
-            clock.seek(2 * HOUR + 30_000);
-            expect(clock.getTrackTime(late)).toBe(30_000);
+            clock.seek(600_000);
+            expect(clock.isTrackDone(early)).toBe(true);
+            expect(clock.isTrackDone(late)).toBe(true);
         });
 
         it('marks a track done once its own duration has passed', () => {
-            const short = track(0, 60_000);
+            const short = track(0, MINUTE);
             const long = track(0, 2 * HOUR);
             const clock = clockWith([short, long]);
             clock.seek(59_000);
@@ -265,13 +267,20 @@ describe('createPlaybackClock', () => {
             expect(clock.isTrackDone(long)).toBe(false);
         });
 
-        it('accounts for a later track when deciding it is done', () => {
-            const late = track(2 * HOUR, 60_000);
+        it("ignores a track's t0 entirely when deciding it is done", () => {
+            const late = track(2 * HOUR, MINUTE);
             const clock = clockWith([late]);
-            clock.seek(0);
+            clock.seek(MINUTE - 1);
             expect(clock.isTrackDone(late)).toBe(false);
-            clock.seek(2 * HOUR + 60_000);
+            clock.seek(MINUTE);
             expect(clock.isTrackDone(late)).toBe(true);
+        });
+
+        it('does not care which order the tracks arrive in', () => {
+            const a = track(0, 60_000, 'a');
+            const b = track(5 * HOUR, 90_000, 'b');
+            expect(clockWith([a, b]).getTotalMs()).toBe(90_000);
+            expect(clockWith([b, a]).getTotalMs()).toBe(90_000);
         });
     });
 
@@ -294,11 +303,22 @@ describe('createPlaybackClock', () => {
             expect(clock.getElapsedMs()).toBe(60_000);
         });
 
-        it('keeps elapsed and playing when a later track is added', () => {
-            // Dropping a second, later ride mid-playback must not interrupt the
-            // first one: the origin is unchanged, so the elapsed time still means
-            // the same moment.
+        it('keeps elapsed and playing when a track is added', () => {
+            // Adding a ride mid-playback must not interrupt the one already
+            // running: no track's time depends on which others are loaded.
             const clock = clockWith([track(0, HOUR)]);
+            clock.seek(30_000);
+            clock.play();
+            clock.setTracks([track(0, HOUR), track(2 * HOUR, HOUR)]);
+            expect(clock.getElapsedMs()).toBe(30_000);
+            expect(clock.isPlaying()).toBe(true);
+            expect(clock.getTotalMs()).toBe(HOUR);
+        });
+
+        it('keeps elapsed and playing when an earlier ride is added', () => {
+            // Under per-start alignment there is no origin to move, so even
+            // adding a ride recorded hours earlier leaves the playhead alone.
+            const clock = clockWith([track(2 * HOUR, HOUR)]);
             clock.seek(30_000);
             clock.play();
             clock.setTracks([track(0, HOUR), track(2 * HOUR, HOUR)]);
@@ -306,25 +326,14 @@ describe('createPlaybackClock', () => {
             expect(clock.isPlaying()).toBe(true);
         });
 
-        it('resets and pauses when an earlier track is added', () => {
-            // An earlier t0 redefines the origin, so every track's offset changes
-            // and the old elapsed time no longer refers to the same moment.
-            const clock = clockWith([track(2 * HOUR, HOUR)]);
+        it('keeps elapsed and playing when a ride is removed', () => {
+            const clock = clockWith([track(0, HOUR), track(2 * HOUR, 2 * HOUR)]);
             clock.seek(30_000);
             clock.play();
-            clock.setTracks([track(0, HOUR), track(2 * HOUR, HOUR)]);
-            expect(clock.getElapsedMs()).toBe(0);
-            expect(clock.isPlaying()).toBe(false);
-        });
-
-        it('resets and pauses when the earliest track is removed', () => {
-            // Removing it moves the origin later, so the remaining tracks shift.
-            const clock = clockWith([track(0, HOUR), track(2 * HOUR, HOUR)]);
-            clock.seek(30_000);
-            clock.play();
-            clock.setTracks([track(2 * HOUR, HOUR)]);
-            expect(clock.getElapsedMs()).toBe(0);
-            expect(clock.isPlaying()).toBe(false);
+            clock.setTracks([track(0, HOUR)]);
+            expect(clock.getElapsedMs()).toBe(30_000);
+            expect(clock.isPlaying()).toBe(true);
+            expect(clock.getTotalMs()).toBe(HOUR);
         });
 
         it('keeps elapsed and playing when handed the same tracks again', () => {

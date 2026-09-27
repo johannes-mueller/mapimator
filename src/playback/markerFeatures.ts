@@ -1,5 +1,5 @@
 import type { Feature, FeatureCollection, Point } from 'geojson';
-import type { Track, TrackState } from '../types';
+import type { TrackState } from '../types';
 import type { PlaybackStatus } from './interpolate';
 import { positionAt } from './interpolate';
 
@@ -29,7 +29,7 @@ export type TrackMarkerFeature = Feature<Point, TrackMarkerProperties>;
  */
 export function buildMarkerFeatures(
     tracks: TrackState[],
-    trackTimeMs: (track: Track) => number,
+    elapsedMs: number,
 ): FeatureCollection<Point, TrackMarkerProperties> {
     const features: TrackMarkerFeature[] = [];
 
@@ -37,10 +37,7 @@ export function buildMarkerFeatures(
         if (!visible) {
             continue;
         }
-        const position = positionAt(track, trackTimeMs(track));
-        if (position.status === 'pending') {
-            continue;
-        }
+        const position = positionAt(track, elapsedMs);
         // GeoJSON is longitude first, and the typed arrays are latitude first.
         features.push({
             type: 'Feature',

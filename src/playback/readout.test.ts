@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markerTimeMs, PENDING_READOUT, readoutText } from './readout';
+import { markerTimeMs, readoutText } from './readout';
 import { positionAt } from './interpolate';
 import type { Track } from '../types';
 
@@ -44,10 +44,11 @@ const withPause = makeTrack([0, 5 * M, 10 * M, 30 * M, 31 * M], {
 });
 
 describe('readoutText', () => {
-    it('reads as a dash before the track starts', () => {
-        // A track recorded two hours into a shared run is not at zero, it is
-        // simply not there yet, and showing 0:00 would read as "finished".
-        expect(readoutText(steady, -2 * H)).toBe(PENDING_READOUT);
+    it('reads as zero for a time before the start', () => {
+        // A track recorded two hours later is measured from its own start, so
+        // it reads exactly like the first one rather than being hidden behind a
+        // dash: the marker is at the start line and has not travelled.
+        expect(readoutText(steady, -2 * H)).toBe('0:00 · 0 m');
     });
 
     it('shows the elapsed time and the distance covered', () => {
@@ -90,7 +91,15 @@ describe('readoutText', () => {
     });
 
     it('never shows a negative time', () => {
-        expect(readoutText(steady, -1)).toBe(PENDING_READOUT);
+        expect(readoutText(steady, -1)).toBe('0:00 · 0 m');
+    });
+
+    it('reads the same for every track at the same elapsed time, whatever t0', () => {
+        // The readout is per track only because each track has its own distance;
+        // the clock is shared, so a later recording must not read differently
+        // from an earlier one at the same moment of the run.
+        const later = { ...steady, id: 'later', t0: 5 * H } as Track;
+        expect(readoutText(steady, 15 * S)).toBe(readoutText(later, 15 * S));
     });
 });
 

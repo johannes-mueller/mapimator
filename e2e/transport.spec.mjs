@@ -157,13 +157,23 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
 
     const facts = await page.evaluate(trackFacts);
     suite.check('both rides loaded', facts.length === 2, `count=${facts.length}`);
-    // The late rider starts 90 s in, so the shared run is its own length plus 90 s.
-    const expectedTotal = 90 * S + facts[1].durationMs;
+    // Every ride is measured from its own first point, so the 90 s between the
+    // two recordings is not part of either ride and not part of the run: the run
+    // is as long as the longer of the two.
+    const expectedTotal = Math.max(facts[0].durationMs, facts[1].durationMs);
+    const offsetMs = facts[1].t0 - facts[0].t0;
     const loaded = await page.evaluate(transportState);
     suite.check(
-        'the run lasts as long as the later ride plus its offset',
+        'the run lasts as long as the longest ride, not the widest span',
         loaded.total === expectedTotal,
         `${loaded.total} vs ${expectedTotal}`,
+    );
+    // If offset alignment ever came back, the total would grow by the 90 s gap
+    // and this would fail, so the gap is provably not part of the run.
+    suite.check(
+        'and is not stretched by the gap between the recordings',
+        loaded.total < offsetMs + facts[1].durationMs,
+        `total=${loaded.total}, offset-aligned would be ${offsetMs + facts[1].durationMs}`,
     );
     suite.check('timeline is enabled once tracks exist', loaded.timelineDisabled === false);
     suite.check('speed is enabled once tracks exist', loaded.speedDisabled === false);
@@ -182,6 +192,33 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
         'the timeline announces a readable position',
         loaded.timelineValueText === `0:00 of ${independentDuration(expectedTotal)}`,
         String(loaded.timelineValueText),
+    );
+
+    // The whole premise: the two rides were recorded 90 s apart and must still
+    // start together, so at the same moment of the run both markers are the same
+    // fraction of the way along their own line.
+    await seekAndSettle(page, expectedTotal / 5, 'Late Rider', 0.2);
+    const together = await page.evaluate(markerStates);
+    suite.check(
+        'both rides are 20% along their own line at 20% of the run',
+        together !== null &&
+            together.length === 2 &&
+            together.every((f) => Math.abs(f.progress - 0.2) < 1e-6) &&
+            byName(together, 'Late Rider')?.lon < byName(together, 'Early Rider')?.lon,
+        JSON.stringify(together?.map((f) => [f.name, f.progress, f.lon])),
+    );
+
+    // The offset is real information about the files, so it is shown rather than
+    // silently dropped along with the alignment that used to act on it.
+    const legendMeta = await page.evaluate(() =>
+        [...document.querySelectorAll('.legend-meta')].map((el) => el.textContent),
+    );
+    suite.check(
+        'the legend says how much later the second ride was recorded',
+        legendMeta.length === 2 &&
+            legendMeta[0].includes(`recorded ${independentDuration(offsetMs)} later`) === false &&
+            legendMeta[1].includes(`recorded ${independentDuration(offsetMs)} later`),
+        JSON.stringify(legendMeta),
     );
 
     suite.section('SCRUBBING');
@@ -233,10 +270,10 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     );
 
     // The marker has to have followed the scrub, or the map is showing one time
-    // while the bar shows another. The early rider may be finished by now, so the
-    // wait is on the later one, which is still running wherever the handle landed.
-    const lateLocal = Math.max(0, dragged.elapsed - 90 * S);
-    const settled = await settle(page, 'Late Rider', Math.min(1, lateLocal / facts[1].durationMs));
+    // while the bar shows another. The later ride is the one to wait on, because
+    // the whole run is its own length.
+    const draggedFraction = Math.min(1, dragged.elapsed / facts[1].durationMs);
+    const settled = await settle(page, 'Late Rider', draggedFraction);
     suite.check('the markers caught up with the scrub', settled);
     const draggedMarkers = await page.evaluate(markerStates);
     const draggedEarly = byName(draggedMarkers, 'Early Rider');
@@ -246,9 +283,11 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
         `lon=${draggedEarly?.lon} lat=${draggedEarly?.lat}`,
     );
     suite.check(
-        'the late rider is still running by now',
-        draggedEarly !== null && byName(draggedMarkers, 'Late Rider')?.status === 'running',
-        `${byName(draggedMarkers, 'Late Rider')?.status}`,
+        'the later ride is running at the same fraction, not waiting for its offset',
+        draggedEarly !== null &&
+            byName(draggedMarkers, 'Late Rider')?.status === 'running' &&
+            Math.abs(byName(draggedMarkers, 'Late Rider').progress - draggedFraction) < 1e-6,
+        JSON.stringify(byName(draggedMarkers, 'Late Rider')),
     );
 
     suite.section('KEYBOARD TRANSPORT');
@@ -419,53 +458,46 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     const atZero = await page.evaluate(readouts);
     suite.check('there is a readout per track', atZero.length === 2, `count=${atZero.length}`);
     suite.check(
-        'a ride that has not started reads as a dash, not zero',
-        atZero[0] !== '—' && atZero[1] === '—',
+        'every ride starts at zero, whichever order they were recorded in',
+        atZero[0] === `0:00 · ${independentDistance(0)}` &&
+            atZero[1] === `0:00 · ${independentDistance(0)}`,
         JSON.stringify(atZero),
     );
 
+    // Halfway through the longer ride, both are halfway through: a ride recorded
+    // 90 s later is not sitting at a dash waiting for the clock to catch up.
     const totalEarly = facts[0].durationMs;
     await seekAndSettle(page, totalEarly / 2, 'Early Rider', 0.5);
     const midEarly = await page.evaluate(readouts);
-    // Straight line, equal steps: half the time is half the distance.
+    // Straight lines, equal steps: half the time is half the distance.
     const halfDistance = facts[0].distanceM / 2;
+    const expectedMid = `${independentDuration(totalEarly / 2)} · ${independentDistance(halfDistance)}`;
     suite.check(
         'the running ride reads its own elapsed time and distance',
-        midEarly[0] ===
-            `${independentDuration(totalEarly / 2)} · ${independentDistance(halfDistance)}`,
-        `${midEarly[0]} vs ${independentDuration(totalEarly / 2)} · ${independentDistance(halfDistance)}`,
+        midEarly[0] === expectedMid,
+        `${midEarly[0]} vs ${expectedMid}`,
     );
-    // Halfway through the early ride is exactly when the late one starts, so it
-    // reads as started there. A moment earlier, it has not been reached at all.
+    const lateDistance = facts[1].distanceM * 0.5;
     suite.check(
-        'a ride the playhead has not reached yet reads as a dash',
-        midEarly[1] === '0:00 · 0 m',
+        'and the later ride reads the same moment, not a dash',
+        midEarly[1] ===
+            `${independentDuration(totalEarly / 2)} · ${independentDistance(lateDistance)}`,
         midEarly[1],
     );
-    await seekAndSettle(page, 60 * S, 'Early Rider', 60 / 180);
-    const beforeLate = await page.evaluate(readouts);
     suite.check(
-        'which is not the same as a ride that has not started',
-        beforeLate[1] === '—',
-        `${beforeLate[1]} at ${independentDuration(60 * S)} in`,
+        'and neither readout is a dash anywhere in the run',
+        !midEarly.some((text) => text.includes('—')),
+        JSON.stringify(midEarly),
     );
 
-    await seekAndSettle(page, 90 * S, 'Early Rider', 0.5);
-    const atLateStart = await page.evaluate(readouts);
-    suite.check(
-        'the later ride starts reading the moment the clock reaches it',
-        atLateStart[1] === `0:00 · ${independentDistance(0)}`,
-        atLateStart[1],
-    );
     const lateFacts = facts[1];
-    const lateDistance = lateFacts.distanceM * 0.25;
-    const lateTime = 90 * S + lateFacts.durationMs * 0.25;
-    await seekAndSettle(page, lateTime, 'Late Rider', 0.25);
+    const quarterDistance = lateFacts.distanceM * 0.25;
+    await seekAndSettle(page, lateFacts.durationMs * 0.25, 'Late Rider', 0.25);
     const quarterLate = await page.evaluate(readouts);
     suite.check(
-        'each ride counts from its own start, not the shared one',
+        'a quarter of the way in, each ride is a quarter of the way along its own line',
         quarterLate[1] ===
-            `${independentDuration(lateFacts.durationMs * 0.25)} · ${independentDistance(lateDistance)}`,
+            `${independentDuration(lateFacts.durationMs * 0.25)} · ${independentDistance(quarterDistance)}`,
         quarterLate[1],
     );
 

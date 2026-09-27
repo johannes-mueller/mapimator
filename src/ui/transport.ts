@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type { Track, TrackState } from '../types';
+import type { TrackState } from '../types';
 import { renderMarkers, renderTracks } from '../map/trackLayers';
 import { createPlaybackClock } from '../playback/clock';
 import type { PlaybackClock } from '../playback/clock';
@@ -33,8 +33,6 @@ export interface TransportHandle {
     getElapsedMs: () => number;
     getTotalMs: () => number;
     getSpeed: () => number;
-    /** The shared elapsed time projected onto one track's own timeline. */
-    getTrackTime: (track: Track) => number;
     /** Called whenever the transport redraws, for readouts it does not own. */
     subscribe: (listener: () => void) => () => void;
     /** Re-reads the track set and redraws; call when the store changes. */
@@ -155,7 +153,7 @@ export function createTransport(options: TransportOptions): TransportHandle {
 
     const render = (withLines: boolean): void => {
         const tracks = getTracks();
-        renderMarkers(map, tracks, clock.getTrackTime);
+        renderMarkers(map, tracks, clock.getElapsedMs());
         const key = doneKey(tracks);
         if (withLines || key !== lastDoneKey) {
             lastDoneKey = key;
@@ -294,7 +292,6 @@ export function createTransport(options: TransportOptions): TransportHandle {
         getElapsedMs: () => clock.getElapsedMs(),
         getTotalMs: () => clock.getTotalMs(),
         getSpeed: () => clock.getSpeed(),
-        getTrackTime: (track: Track) => clock.getTrackTime(track),
         subscribe: (listener: () => void) => {
             listeners.add(listener);
             return () => {

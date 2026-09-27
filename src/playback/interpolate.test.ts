@@ -63,23 +63,32 @@ describe('positionAt', () => {
         expect(() => positionAt(empty, 0)).toThrow(/no samples/);
     });
 
-    describe('before the track starts', () => {
-        it('is pending at the first sample', () => {
-            const position = positionAt(straight, -1);
-            expect(position.status).toBe('pending');
+    describe('at or before the start', () => {
+        it('stands on the first sample at exactly zero', () => {
+            const position = positionAt(straight, 0);
+            expect(position.status).toBe('running');
             expect(position.lat).toBe(47);
             expect(position.lon).toBe(0);
             expect(position.index).toBe(0);
         });
 
-        it('is pending for the local time a later track starts at', () => {
-            // A track two hours into a shared run begins with a large negative
-            // local time, and must not be treated as finished.
-            expect(positionAt(straight, -2 * H).status).toBe('pending');
+        it('clamps a negative time to the start rather than failing', () => {
+            // Every track is measured from its own first point, so the clock
+            // cannot produce a negative time. A caller that does anyway gets the
+            // start, which is the only place a marker belongs before then.
+            const position = positionAt(straight, -1);
+            expect(position.status).toBe('running');
+            expect(position.lon).toBe(0);
+            expect(position.index).toBe(0);
+            expect(position.progress).toBe(0);
+            expect(position.fraction).toBe(0);
         });
 
-        it('has zero progress', () => {
-            expect(positionAt(straight, -H).progress).toBe(0);
+        it('clamps a wildly negative time to the start too', () => {
+            const position = positionAt(straight, -2 * H);
+            expect(position.status).toBe('running');
+            expect(position.lon).toBe(0);
+            expect(position.progress).toBe(0);
         });
     });
 
@@ -326,8 +335,22 @@ describe('positionAt', () => {
             expect(positionAt(makeTrack([0], [[7, 47]], { durationMs: 0 }), 0).progress).toBe(1);
         });
 
-        it('is pending for a single-sample track before its start', () => {
-            expect(positionAt(makeTrack([0], [[7, 47]]), -1).status).toBe('pending');
+        it('clamps a negative time on a single-sample track to the start', () => {
+            // A one-sample track has a zero duration, so it is finished by the
+            // time the clock reaches zero; a time before the start is not one the
+            // clock can produce, and clamps to the start instead.
+            const single = makeTrack([0], [[7, 47]], { durationMs: 0 });
+            expect(positionAt(single, 0).status).toBe('done');
+            const before = positionAt(single, -1);
+            expect(before.status).toBe('running');
+            expect(before.lon).toBe(7);
+            expect(before.progress).toBe(0);
+        });
+
+        it('runs a single-sample track that reports a real duration', () => {
+            const single = makeTrack([0], [[7, 47]], { durationMs: 10 * S });
+            expect(positionAt(single, 5 * S).status).toBe('running');
+            expect(positionAt(single, 10 * S).status).toBe('done');
         });
     });
 

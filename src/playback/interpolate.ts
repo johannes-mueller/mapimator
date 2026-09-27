@@ -1,15 +1,17 @@
 import type { Track } from '../types';
 
 /**
- * Where the playhead sits relative to a track.
+ * Where the playhead sits on a track.
  *
- * - `pending` — the playhead has not reached this track's start yet.
- * - `running` — between two samples, so the position is interpolated.
+ * - `running` — at or between samples, so the position is interpolated.
  * - `parked` — the playhead is inside a recorded pause, so the marker is held
  *   at the end of the segment it has just finished.
  * - `done` — the track has run out; the marker rests on its last point.
+ *
+ * There is no "not started yet": every track is measured from its own first
+ * point, so the playhead cannot arrive anywhere before a track begins.
  */
-export type PlaybackStatus = 'pending' | 'running' | 'parked' | 'done';
+export type PlaybackStatus = 'running' | 'parked' | 'done';
 
 export interface TrackPosition {
     status: PlaybackStatus;
@@ -22,9 +24,9 @@ export interface TrackPosition {
     index: number;
     /**
      * How far between `index` and `index + 1` the position sits, 0 to 1. Zero
-     * whenever the position is held on a single sample — pending, parked, done,
-     * or two samples sharing a timestamp — because there is then no span to be
-     * partway across.
+     * whenever the position is held on a single sample — parked, done, or two
+     * samples sharing a timestamp — because there is then no span to be partway
+     * across.
      */
     fraction: number;
 }
@@ -35,10 +37,12 @@ const clamp = (value: number, min: number, max: number): number =>
 /**
  * Where a marker should sit at a given time on a track's own timeline.
  *
- * `timeMs` is the track's local time, in milliseconds, i.e. the shared clock's
- * elapsed time less this track's offset. A negative value means the track has
- * not started. Note that `Track.tRel` is in seconds while `Track.durationMs` is
- * in milliseconds; the conversion happens once, here, so callers never mix them.
+ * `timeMs` is the shared elapsed time in milliseconds, which is also this
+ * track's own time: every track is read from its own first point, so there is no
+ * offset to subtract. A negative value cannot arise from the clock, and is
+ * answered with the start rather than treated as an error. Note that
+ * `Track.tRel` is in seconds while `Track.durationMs` is in milliseconds; the
+ * conversion happens once, here, so callers never mix them.
  *
  * The interesting case is a recorded pause. The parser records a segment break
  * for any gap over 60 s, and this function refuses to interpolate across one:
@@ -59,12 +63,16 @@ export function positionAt(track: Track, timeMs: number): TrackPosition {
     const lastIndex = count - 1;
     const timeS = timeMs / 1000;
 
-    if (timeMs < 0) {
-        return { status: 'pending', ...sampleAt(track, 0), progress: 0, fraction: 0 };
-    }
-
+    // Ahead of the clamp below, because a track whose duration is zero is
+    // finished at elapsed zero rather than running at its only point.
     if (timeMs >= track.durationMs) {
         return { status: 'done', ...sampleAt(track, lastIndex), progress: 1, fraction: 0 };
+    }
+
+    if (timeMs <= 0) {
+        // At or before the start, which is also the answer to a time the clock
+        // could not produce. The marker belongs on the first point either way.
+        return { status: 'running', ...sampleAt(track, 0), progress: 0, fraction: 0 };
     }
 
     // Reached only when `timeMs < durationMs`, so `durationMs > 0` holds here

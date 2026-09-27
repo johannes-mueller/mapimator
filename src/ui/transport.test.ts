@@ -452,9 +452,11 @@ describe('createTransport', () => {
             expect(h.clockElement.textContent).toBe('0:30 / 1:00');
         });
 
-        it('spans the whole shared timeline for tracks recorded far apart', () => {
+        it('spans the longest ride for tracks recorded far apart', () => {
+            // The two hours between the recordings are not part of either ride,
+            // so they are not part of the run either.
             const h = harness([state(minuteTrack('a', 0)), state(minuteTrack('b', 2 * H))]);
-            expect(h.clockElement.textContent).toBe('0:00 / 2:01:00');
+            expect(h.clockElement.textContent).toBe('0:00 / 1:00');
         });
     });
 
@@ -465,11 +467,19 @@ describe('createTransport', () => {
             expect(h.markers()[0].geometry.coordinates[0]).toBeCloseTo(3, 12);
         });
 
-        it('hides a track that has not started and shows it once reached', () => {
+        it('keeps a later-recorded track on screen from the first frame', () => {
+            // No track is ever "not started": measured from its own first point,
+            // a ride recorded two hours later still has a marker on the line.
             const h = harness([state(minuteTrack('a', 0)), state(minuteTrack('b', 2 * H))]);
-            expect(h.markers().map((f) => f.properties.trackId)).toEqual(['a']);
-            h.transport.seek(2 * H);
             expect(h.markers().map((f) => f.properties.trackId)).toEqual(['a', 'b']);
+        });
+
+        it('moves a later-recorded track in step with the run', () => {
+            const h = harness([state(minuteTrack('a', 0)), state(minuteTrack('b', 2 * H))]);
+            h.transport.seek(30 * S);
+            // Both rides stand at their own thirty seconds, not one at thirty
+            // seconds and the other still waiting.
+            expect(h.markers().map((f) => f.geometry.coordinates[0])).toEqual([3, 3]);
         });
 
         it('follows a seek to the end of a track', () => {
@@ -539,13 +549,32 @@ describe('createTransport', () => {
             expect(h.transport.getElapsedMs()).toBe(20 * S);
         });
 
-        it('resets when an earlier track is added', () => {
+        it('keeps the position and playback when an earlier track is added', () => {
+            // Under per-start alignment there is no origin that a new t0 can move,
+            // so adding a ride recorded earlier changes nothing about where the
+            // playhead is and must not interrupt a run in progress.
             const h = harness([state(minuteTrack('b', 2 * H))]);
             h.transport.seek(20 * S);
             h.transport.play();
             h.setTracks([state(minuteTrack('a', 0)), state(minuteTrack('b', 2 * H))]);
-            expect(h.transport.getElapsedMs()).toBe(0);
-            expect(h.transport.isPlaying()).toBe(false);
+            expect(h.transport.getElapsedMs()).toBe(20 * S);
+            expect(h.transport.isPlaying()).toBe(true);
+        });
+
+        it('clamps the position when the replacement set is shorter', () => {
+            const long = makeTrack(
+                'long',
+                0,
+                [0, 2 * H],
+                [
+                    [1, 47],
+                    [5, 47],
+                ],
+            );
+            const h = harness([state(long)]);
+            h.transport.seek(H);
+            h.setTracks([state(minuteTrack('a', 0))]);
+            expect(h.transport.getElapsedMs()).toBe(MINUTE);
         });
 
         it('clears the readout when everything is removed', () => {
@@ -841,12 +870,19 @@ describe('subscribers', () => {
     });
 });
 
-describe('getTrackTime', () => {
-    it('projects the shared clock onto a track recorded later', () => {
-        // A track an hour into the run has its own hour still to do.
-        const later = minuteTrack('b', H);
-        const h = harness([state(minuteTrack('a', 0)), state(later)]);
-        h.transport.seek(H + 30_000);
-        expect(h.transport.getTrackTime(later)).toBe(30_000);
+describe('tracks recorded at different times', () => {
+    it('reads the total from the longest ride, not the widest time span', () => {
+        // Two one-minute rides two hours apart: the run is one minute long.
+        const h = harness([state(minuteTrack('a', 0)), state(minuteTrack('b', 2 * H))]);
+        expect(h.clockElement.textContent).toBe('0:00 / 1:00');
+    });
+
+    it('exposes one shared elapsed time rather than a per-track one', () => {
+        // There is no per-track time to read, because t0 never shifts the playhead.
+        const h = harness([state(minuteTrack('a', 0)), state(minuteTrack('b', 2 * H))]);
+        h.transport.seek(30 * S);
+        expect(h.transport.getElapsedMs()).toBe(30 * S);
+        expect(h.timeline.value).toBe('30000');
+        expect(h.markers().map((f) => f.geometry.coordinates[0])).toEqual([3, 3]);
     });
 });

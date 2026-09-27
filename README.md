@@ -17,7 +17,7 @@ Working now:
 - **GPX loading by drag-and-drop or file picker**, parsed in a Web Worker so a 6 MB file never freezes the page. Timestamped and untimestamped files both work; names survive entities, `CDATA`, and windows-1252 exports.
 - **A track legend** with per-track colour, point count, distance, and duration, each removable.
 - **Static polylines** drawn as a `MultiLineString`, so a recorded pause is left blank rather than joined by a straight line.
-- **Simultaneous animation** on one shared clock — press play and every track advances together, each at its own pace. Tracks recorded hours apart run side by side; a track that has not been reached yet stays hidden; a track that runs out of points freezes and dims. See [Playback](#playback).
+- **Simultaneous animation** on one shared clock — press play and every track advances together, each measured from its own `t0`. Tracks recorded hours apart start side by side and the legend records how far apart they were recorded; a track that runs out of points freezes and dims. See [Playback](#playback).
 - **Transport you can actually operate with** — scrub the timeline and the map follows the pointer, run at 1× to 300×, and drive it all from the keyboard. Per-track readouts in the legend show where each ride has got, counting from its own start.
 
 ## Requirements
@@ -142,11 +142,11 @@ src/
     lineFeatures.ts           Track -> GeoJSON MultiLineString
     lineFeatures.test.ts
   playback/
-    clock.ts                  the shared clock, speed, seek, per-track projection
+    clock.ts                  the shared clock, speed, seek, total span
     clock.test.ts
     interpolate.ts            sample lookup, gap parking, distance at a position
     interpolate.test.ts
-    markerFeatures.ts         TrackState + clock time -> playhead markers
+    markerFeatures.ts         TrackState + elapsed time -> playhead markers
     markerFeatures.test.ts
     readout.ts                per-track elapsed time and distance covered
     readout.test.ts
@@ -208,7 +208,7 @@ One consequence worth knowing before editing: `Track.tRel` is in **seconds** whi
 
 ## Playback
 
-Pressing play advances **one shared elapsed-time clock**; every track's position is its own timestamp projected onto that clock as `elapsed - (t0 - earliest t0)`. Two rides recorded hours apart therefore run side by side, each at its own pace, and a track that has not been reached yet stays hidden until the clock gets to it. A track that runs out of points freezes on its last position and its line dims, while the others carry on.
+Pressing play advances **one shared elapsed-time clock**, and every track is read against it directly. Because each track is measured from its own first point, two rides of the same course recorded hours apart start side by side on the start line and stay side by side: at ten minutes in you are looking at where each ride was ten minutes in. The timestamps are not discarded — the legend says how much later each ride was recorded, relative to the first — they just do not decide what the playhead means. The run lasts as long as the **longest** ride in it, since the gap between two recordings is not part of either. A track that runs out of points freezes on its last position and its line dims, while the others carry on.
 
 A marker inside a **recorded pause** stops at the end of the segment it has just finished and waits there for the length of the gap, then resumes at the first point of the next one. This is the same segment break that leaves the line undrawn across the gap, and it is why a lunch stop does not send a marker gliding across open country. The shared clock keeps counting throughout the gap, so the track is simply _waiting_ rather than being behind: its legend row still shows the distance it had covered when it stopped, and jumps forward the moment it starts again.
 

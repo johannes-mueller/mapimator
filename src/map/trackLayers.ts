@@ -97,20 +97,14 @@ export function renderTracks(
 
 /**
  * Moves the playhead markers. Called on every animation frame while playing and
- * once whenever the track set changes, which is why it takes the clock's own
- * time lookup rather than a timestamp: the clock owns the shared-origin
- * arithmetic and there is only one copy of it.
+ * once whenever the track set changes.
  */
-export function renderMarkers(
-    map: MaplibreMap,
-    tracks: TrackState[],
-    trackTimeMs: (track: Track) => number,
-): void {
+export function renderMarkers(map: MaplibreMap, tracks: TrackState[], elapsedMs: number): void {
     const source = map.getSource(TRACK_MARKERS_SOURCE) as GeoJSONSource | undefined;
     if (!source) {
         return;
     }
-    source.setData(buildMarkerFeatures(tracks, trackTimeMs));
+    source.setData(buildMarkerFeatures(tracks, elapsedMs));
 }
 
 export function fitTracksInView(map: MaplibreMap, bounds: Bounds, maxZoom = 15): void {

@@ -3,9 +3,6 @@ import { distanceAt, positionAt } from './interpolate';
 import type { TrackPosition } from './interpolate';
 import type { Track } from '../types';
 
-/** Shown for a track the playhead has not reached yet. */
-export const PENDING_READOUT = '—';
-
 /**
  * The track's own elapsed time at a position.
  *
@@ -28,13 +25,12 @@ export function markerTimeMs(track: Track, position: TrackPosition, playheadMs: 
  * it has got.
  *
  * Both figures describe where the marker is, not where the playhead is, so the
- * legend and the map can never disagree.
+ * legend and the map can never disagree. A time before the start is reported as
+ * zero rather than as a negative, since a marker clamped to the start has
+ * genuinely not travelled yet.
  */
 export function readoutText(track: Track, timeMs: number): string {
     const position = positionAt(track, timeMs);
-    if (position.status === 'pending') {
-        return PENDING_READOUT;
-    }
-    const time = markerTimeMs(track, position, timeMs);
+    const time = Math.max(0, markerTimeMs(track, position, timeMs));
     return `${formatDuration(time)} · ${formatDistance(distanceAt(track, position))}`;
 }

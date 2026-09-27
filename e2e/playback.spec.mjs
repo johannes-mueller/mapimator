@@ -354,8 +354,8 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
 
     suite.section('A FINISHED TRACK DIMS WHILE ANOTHER CONTINUES');
     await load(page, fixtureDir, 'early-finisher.gpx');
-    // Every fixture starts at the same instant, so the shared origin is
-    // unchanged and the total grows to the marathon's 10 minutes.
+    // Every fixture starts at the same instant, so the run is as long as the
+    // marathon's 10 minutes and the sprint is well and truly finished at 1:00.
     const mixed = await seekTo(page, 60 * S, 60 / 600);
     const sprint = byName(mixed, 'Sprint');
     const marathon = byName(mixed, 'Marathon');
