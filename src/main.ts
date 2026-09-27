@@ -3,18 +3,22 @@ import './style.css';
 import { readStoredBasemapId } from './map/basemaps';
 import { createMapView } from './map/mapView';
 import type { MapViewHandle } from './map/mapView';
-import { fitTracksInView, renderTracks } from './map/trackLayers';
+import { fitTracksInView } from './map/trackLayers';
 import { GpxParseClient } from './gpx/parseClient';
 import { createTrackStore } from './tracks/trackStore';
 import { createBasemapSwitcher } from './ui/basemapSwitcher';
 import { createDropzone } from './ui/dropzone';
 import { createLegend } from './ui/legend';
+import { createTransport } from './ui/transport';
+import type { TransportHandle } from './ui/transport';
 
 declare global {
     interface Window {
         mapimator: MapViewHandle & {
             store: ReturnType<typeof createTrackStore>;
             trackCount: () => number;
+            /** Exposed so the E2E suite can drive playback deterministically. */
+            playback: TransportHandle;
         };
     }
 }
@@ -48,10 +52,18 @@ const view = createMapView(requireElement<HTMLElement>('map'), initialBasemapId)
 const store = createTrackStore();
 const parser = new GpxParseClient();
 
+const transport = createTransport({
+    map: view.map,
+    playButton: requireButton('play-toggle'),
+    clockElement: requireElement<HTMLElement>('clock'),
+    getTracks: () => store.getAll(),
+});
+
 window.mapimator = {
     ...view,
     store,
     trackCount: () => store.getAll().length,
+    playback: transport,
 };
 
 const switcher = createBasemapSwitcher(
@@ -131,17 +143,22 @@ async function loadFiles(files: File[]): Promise<void> {
 
 const redraw = (): void => {
     legend.render(store.getAll());
-    renderTracks(view.map, store.getAll());
+    // The transport owns the track overlays, so a store change is handed to it
+    // rather than rendered here: it has to update the shared clock as well.
+    transport.refresh();
 };
 
 store.subscribe(redraw);
 view.onStyleReady(() => {
     switcher.setActive(view.getBasemapId());
-    redraw();
+    legend.render(store.getAll());
+    // A new style starts with empty sources, so the overlays are fed again.
+    transport.redraw();
 });
 redraw();
 
 window.addEventListener('beforeunload', () => {
+    transport.dispose();
     parser.dispose();
     view.map.remove();
 });

@@ -5,12 +5,11 @@ const MAP_REGION = { x: 400, y: 150, w: 700, h: 400 };
 
 /** Plain-object snapshot of the store, so no typed arrays cross the bridge. */
 const summarize = () =>
-    window.mapimator.store.getAll().map(({ track, visible, done }) => ({
+    window.mapimator.store.getAll().map(({ track, visible }) => ({
         id: track.id,
         name: track.name,
         color: track.color,
         visible,
-        done,
         points: track.lat.length,
         lat0: track.lat[0],
         lon0: track.lon[0],

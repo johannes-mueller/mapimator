@@ -107,6 +107,37 @@ ${[0, 1, 2, 3].map((i) => `  ${pt(45.0 + i * 0.01, 6.0 + i * 0.01, 300 + i)}`).j
 
     'notes.txt': () => 'ignored by the dropzone',
 
+    // Two tracks recorded from the same instant, so they animate side by side.
+    // Coordinates step by exactly 0.01 per minute, which makes an interpolated
+    // marker position an exact expectation rather than an approximate one.
+    'simultaneous.gpx': () =>
+        gpx(`  <trk><name>Rider A</name><trkseg>
+${[0, 1, 2, 3, 4]
+    .map((i) => `  ${pt(47.0 + i * 0.01, 8.0 + i * 0.01, 400, iso(T0, i * 60))}`)
+    .join('\n')}
+  </trkseg></trk>
+  <trk><name>Rider B</name><trkseg>
+${[0, 1, 2, 3, 4]
+    .map((i) => `  ${pt(46.0 + i * 0.01, 7.0 + i * 0.01, 400, iso(T0, i * 60))}`)
+    .join('\n')}
+  </trkseg></trk>`),
+
+    // One track finishes at 1:00 while the other runs to 10:00, so the shorter
+    // one can be checked for going dim and stopping while the playhead is still
+    // well inside the longer one. Samples are 30 s apart deliberately: the
+    // parser treats any gap over 60 s as a recorded pause, so wider spacing would
+    // split both tracks into segments instead.
+    'early-finisher.gpx': () =>
+        gpx(`  <trk><name>Sprint</name><trkseg>
+${[0, 1, 2].map((i) => `  ${pt(45.0 + i * 0.01, 6.0 + i * 0.01, 300, iso(T0, i * 30))}`).join('\n')}
+  </trkseg></trk>
+  <trk><name>Marathon</name><trkseg>
+${Array.from(
+    { length: 21 },
+    (_, i) => `  ${pt(44.0 + i * 0.005, 5.0 + i * 0.005, 300, iso(T0, i * 30))}`,
+).join('\n')}
+  </trkseg></trk>`),
+
     // 60k points, to confirm the worker path stays off the main thread.
     'bulk.gpx': () => {
         const rows = [];

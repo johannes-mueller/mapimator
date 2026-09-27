@@ -4,7 +4,7 @@ A static web app for loading multiple GPX tracks and animating them **simultaneo
 
 Built for comparing repeat runs of the same course: each track's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The finished state is deliberately server-free — files are parsed in the browser and never leave the machine.
 
-> **Status: phase 1 of 7 complete.** The map, the basemap switcher, and the application shell work today. GPX upload, the track legend, the animation, and the chart are planned but **not implemented yet** — the dropzone, playback controls, and chart are visible placeholders. See [Roadmap](#roadmap).
+> **Status: phases 1–3 of 7 complete.** Loading GPX files, the track legend, and simultaneous marker animation on a shared clock all work today. Speed multipliers, timeline scrubbing, the chart panel, and sharing are planned but **not implemented yet**. See [Roadmap](#roadmap).
 
 ## Features
 
@@ -14,6 +14,10 @@ Working now:
 - **Seamless background switching** — the map is never re-created, and position, zoom, bearing, and pitch are carried across every switch. Application overlays are re-attached automatically, so a full cycle through all five basemaps is lossless.
 - **Persisted selection** — your basemap choice is remembered in `localStorage` across reloads.
 - **Map navigation** via mouse, touch, and keyboard, with zoom and attribution controls, in a responsive dark shell.
+- **GPX loading by drag-and-drop or file picker**, parsed in a Web Worker so a 6 MB file never freezes the page. Timestamped and untimestamped files both work; names survive entities, `CDATA`, and windows-1252 exports.
+- **A track legend** with per-track colour, point count, distance, and duration, each removable.
+- **Static polylines** drawn as a `MultiLineString`, so a recorded pause is left blank rather than joined by a straight line.
+- **Simultaneous animation** on one shared clock — press play and every track advances together, each at its own pace. Tracks recorded hours apart run side by side; a track that has not been reached yet stays hidden; a track that runs out of points freezes and dims. See [Playback](#playback).
 
 ## Requirements
 
@@ -60,7 +64,7 @@ There are two layers, and they answer different questions.
 
 **Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, the E2E harness itself, and formatting. They run in a Node environment with no DOM and need no network, so they are fast — the whole suite takes under a second.
 
-**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline actually changes pixels on the map, that `dist/` really works from a subpath, and that a 60,000-point file never blocks the main thread. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
+**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that playback does not hijack the camera, that a recorded pause parks the marker instead of gliding it across the gap, that `dist/` really works from a subpath, and that a 60,000-point file never blocks the main thread. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
 
 The E2E suite needs **live network access to `tiles.openfreemap.org`** — it renders the real styles and the real tiles, because a recorded snapshot would test the recording rather than the app. It preflights that endpoint before launching a browser, so a connectivity problem reports itself as an environment problem instead of a 30-second timeout:
 
@@ -89,7 +93,7 @@ Parsing happens in a **Web Worker** (`src/gpx/parseWorker.ts`) so a large file n
 
 A file with no `<time>` elements is still usable: timestamps are synthesised from distance at an assumed walking pace, so the track can be animated in later phases. Points missing only some timestamps inherit the previous point's, so a track is never non-monotonic because a few points went unlogged.
 
-**Pauses are not drawn as straight lines.** A gap longer than 60 s inside one track, or a new `<trkseg>`, is recorded as a _segment break_ and the track is rendered as a `MultiLineString`. That is what stops a marker gliding across open country in phase 3 just because the watch was paused for lunch.
+**Pauses are not drawn as straight lines.** A gap longer than 60 s inside one track, or a new `<trkseg>`, is recorded as a _segment break_ and the track is rendered as a `MultiLineString`. The same break parks the animation marker at the end of the segment for the length of the gap, so a watch paused for lunch does not send a marker gliding across open country. See [Playback](#playback).
 
 ## Deploying
 
@@ -136,6 +140,13 @@ src/
     palette.ts                the twelve track colours
     lineFeatures.ts           Track -> GeoJSON MultiLineString
     lineFeatures.test.ts
+  playback/
+    clock.ts                  the shared clock, speed, seek, per-track projection
+    clock.test.ts
+    interpolate.ts            sample lookup and gap parking
+    interpolate.test.ts
+    markerFeatures.ts         TrackState + clock time -> playhead markers
+    markerFeatures.test.ts
   map/
     basemaps.ts               the five styles + localStorage persistence
     basemaps.test.ts          style table, id validation, storage fallback
@@ -145,6 +156,8 @@ src/
     basemapSwitcher.ts        basemap buttons
     dropzone.ts               drag-and-drop, file picker, parse status
     legend.ts                 track list
+    transport.ts              play button, readout, frame loop, marker/lines
+    transport.test.ts
   format.test.ts
 e2e/
   run.mjs                     orchestrator: preflight, server, specs, summary
@@ -154,6 +167,7 @@ e2e/
   basemap.spec.mjs            shell, basemap switching, overlays, persistence
   subpath.spec.mjs            dist/ served from a subpath, as a project site is
   tracks.spec.mjs             parsing, geometry, gaps, errors, large file
+  playback.spec.mjs           the shared clock, markers, play/pause, gap parking
 ```
 
 `e2e/*.spec.mjs` files are picked up automatically, so adding a spec needs no edit to the runner. A spec may export a `fixtures` list naming the GPX files it loads; only those are written to disk, so a spec that loads no GPX writes nothing. The fixture directory is emptied before each run, so a file left behind by an earlier run can never stand in for one that has stopped being generated.
@@ -170,7 +184,9 @@ Run `npm run format` to apply it, or `npm run format:check` to verify without wr
 
 Two-space indentation is the more common default in the wider TypeScript ecosystem; four is equally common and is what the TypeScript compiler's own codebase uses. Neither is more correct — the point is that the choice is recorded in configuration so every contributor and every editor agrees automatically.
 
-Track data is designed to be modelled as **typed arrays** (`Float64Array` for coordinates and times, `Float32Array` for elevation and distance) rather than objects, so a 200,000-point track costs a few megabytes instead of hundreds, and the parse worker can transfer the buffers to the main thread without copying. The shapes are declared in `src/types.ts`; phase 2 populates them.
+Track data is designed to be modelled as **typed arrays** (`Float64Array` for coordinates and times, `Float32Array` for elevation and distance) rather than objects, so a 200,000-point track costs a few megabytes instead of hundreds, and the parse worker can transfer the buffers to the main thread without copying. The shapes are declared in `src/types.ts` and populated by the parser.
+
+One consequence worth knowing before editing: `Track.tRel` is in **seconds** while `Track.durationMs` is in **milliseconds**. `src/playback/interpolate.ts` converts once, at the boundary, and `interpolate.test.ts` has a check that fails if that conversion is ever dropped.
 
 ## Roadmap
 
@@ -178,17 +194,21 @@ Track data is designed to be modelled as **typed arrays** (`Float64Array` for co
 | -------------------------------------------------------------------------- | -------- |
 | 1. Shell, MapLibre setup, basemap switching                                | **Done** |
 | 2. GPX parser, Web Worker, dropzone, legend, static polylines              | **Done** |
-| 3. Shared clock, interpolation, simultaneous marker animation              | Planned  |
+| 3. Shared clock, interpolation, simultaneous marker animation              | **Done** |
 | 4. Timeline scrubbing, speed multiplier, keyboard transport, live readouts | Planned  |
 | 5. Chart panel (elevation/speed, time/distance axis)                       | Planned  |
 | 6. Legend toggles, follow camera, rendering polish                         | Planned  |
 | 7. Single-file build for easy sharing                                      | Planned  |
 
-Planned behaviours, for reference:
+## Playback
 
-- Playback offers 1×–300× speed, so a one-hour run finishes in seconds.
-- A track that runs out of points freezes at its last position and dims.
-- Each track is normalised to its own first timestamp, and all tracks then advance on one shared elapsed-time clock, so two rides recorded hours apart still run side by side.
+Pressing play advances **one shared elapsed-time clock**; every track's position is its own timestamp projected onto that clock as `elapsed - (t0 - earliest t0)`. Two rides recorded hours apart therefore run side by side, each at its own pace, and a track that has not been reached yet stays hidden until the clock gets to it. A track that runs out of points freezes on its last position and its line dims, while the others carry on.
+
+A marker inside a **recorded pause** stops at the end of the segment it has just finished and waits there for the length of the gap, then resumes at the first point of the next one. The playhead time keeps advancing throughout, so the readout does not stall either. This is the same segment break that leaves the line undrawn across the gap, and it is why a lunch stop does not send a marker gliding across open country.
+
+Frames are cheap by design. The frame loop only runs while playing, redraws are driven by the clock's own change notification rather than by the frame callback, and the line geometry is rebuilt only when the set of finished tracks actually changes — `buildLineFeatures` walks every sample of every track, and doing that sixty times a second would make a large file unplayable. Playback never moves the camera.
+
+Still to come in phase 4: 1×–300× speed, so a one-hour run finishes in seconds; scrubbing the timeline; and keyboard transport.
 
 ## Troubleshooting
 

@@ -78,16 +78,18 @@ const makeTrack = (over: Partial<Track> = {}): Track => ({
 const state = (track: Track, over: Partial<TrackState> = {}): TrackState => ({
     track,
     visible: true,
-    done: false,
     ...over,
 });
 
+/** Nothing finished, unless a test says otherwise. */
+const noneDone = (): boolean => false;
+
 describe('buildLineFeatures', () => {
     it('emits one MultiLineString feature per visible track', () => {
-        const fc = buildLineFeatures([
-            state(makeTrack({ name: 'A' })),
-            state(makeTrack({ name: 'B' })),
-        ]);
+        const fc = buildLineFeatures(
+            [state(makeTrack({ name: 'A' })), state(makeTrack({ name: 'B' }))],
+            noneDone,
+        );
         expect(fc.type).toBe('FeatureCollection');
         expect(fc.features).toHaveLength(2);
         expect(fc.features[0].geometry.type).toBe('MultiLineString');
@@ -95,7 +97,7 @@ describe('buildLineFeatures', () => {
 
     it('carries the styling and identity properties the layers read', () => {
         const track = makeTrack({ id: 'track-9', name: 'Ride', color: '#30a8e0' });
-        const [feature] = buildLineFeatures([state(track, { done: true })]).features;
+        const [feature] = buildLineFeatures([state(track)], () => true).features;
         expect(feature.properties).toEqual({
             trackId: 'track-9',
             name: 'Ride',
@@ -106,14 +108,38 @@ describe('buildLineFeatures', () => {
     });
 
     it('omits hidden tracks', () => {
-        const fc = buildLineFeatures([
-            state(makeTrack({ name: 'Shown' })),
-            state(makeTrack({ name: 'Hidden' }), { visible: false }),
-        ]);
+        const fc = buildLineFeatures(
+            [
+                state(makeTrack({ name: 'Shown' })),
+                state(makeTrack({ name: 'Hidden' }), { visible: false }),
+            ],
+            noneDone,
+        );
         expect(fc.features.map((f) => f.properties.name)).toEqual(['Shown']);
     });
 
     it('returns an empty collection for no tracks', () => {
-        expect(buildLineFeatures([]).features).toEqual([]);
+        expect(buildLineFeatures([], noneDone).features).toEqual([]);
+    });
+
+    it('asks the predicate about each visible track', () => {
+        const a = makeTrack({ id: 'a' });
+        const b = makeTrack({ id: 'b' });
+        const asked: string[] = [];
+        buildLineFeatures([state(a), state(b)], (track) => {
+            asked.push(track.id);
+            return false;
+        });
+        expect(asked).toEqual(['a', 'b']);
+    });
+
+    it('takes done from the predicate rather than the track state', () => {
+        // Whether a line reads as travelled depends on the playhead, not on the
+        // file, so the store does not carry the flag.
+        const track = makeTrack({ id: 'a' });
+        expect(buildLineFeatures([state(track)], noneDone).features[0].properties.done).toBe(false);
+        expect(buildLineFeatures([state(track)], () => true).features[0].properties.done).toBe(
+            true,
+        );
     });
 });

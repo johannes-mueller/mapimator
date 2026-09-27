@@ -39,7 +39,7 @@ export function createTrackStore(): TrackStore {
                 color: trackColorFor(states.length + offset),
             };
         });
-        states = [...states, ...added.map((track) => ({ track, visible: true, done: false }))];
+        states = [...states, ...added.map((track) => ({ track, visible: true }))];
         notify();
         return added;
     };

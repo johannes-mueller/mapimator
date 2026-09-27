@@ -33,7 +33,6 @@ describe('createTrackStore', () => {
         expect(a.id).not.toBe(b.id);
         expect(a.color).not.toBe(b.color);
         expect(store.getAll().map((s) => s.visible)).toEqual([true, true]);
-        expect(store.getAll().map((s) => s.done)).toEqual([false, false]);
     });
 
     it('keeps ids unique across separate add calls', () => {

@@ -69,12 +69,20 @@ function featureFor(track: Track, done: boolean): TrackLineFeature {
     };
 }
 
-/** Builds the whole-lines collection. Hidden tracks contribute nothing. */
+/**
+ * Builds the whole-lines collection. Hidden tracks contribute nothing.
+ *
+ * `isDone` comes from the playback clock rather than from the track state,
+ * because whether a line reads as travelled depends on where the playhead is,
+ * not on anything the file itself records. A track that has not been reached
+ * yet is not done, so it stays bright ahead of the playhead.
+ */
 export function buildLineFeatures(
     tracks: TrackState[],
+    isDone: (track: Track) => boolean,
 ): FeatureCollection<MultiLineString, TrackLineProperties> {
     return {
         type: 'FeatureCollection',
-        features: tracks.filter((t) => t.visible).map((t) => featureFor(t.track, t.done)),
+        features: tracks.filter((t) => t.visible).map((t) => featureFor(t.track, isDone(t.track))),
     };
 }

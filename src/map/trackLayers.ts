@@ -1,8 +1,10 @@
 import type { GeoJSONSource, LngLatBoundsLike, Map as MaplibreMap } from 'maplibre-gl';
 import type { FeatureCollection, MultiLineString, Point } from 'geojson';
-import type { Bounds, TrackState } from '../types';
+import type { Bounds, Track, TrackState } from '../types';
 import type { TrackLineProperties } from '../tracks/lineFeatures';
 import { buildLineFeatures } from '../tracks/lineFeatures';
+import type { TrackMarkerProperties } from '../playback/markerFeatures';
+import { buildMarkerFeatures } from '../playback/markerFeatures';
 
 export const TRACK_LINES_SOURCE = 'track-lines';
 export const TRACK_MARKERS_SOURCE = 'track-markers';
@@ -15,7 +17,7 @@ const EMPTY_LINES: FeatureCollection<MultiLineString, TrackLineProperties> = {
     features: [],
 };
 
-const EMPTY_MARKERS: FeatureCollection<Point> = {
+const EMPTY_MARKERS: FeatureCollection<Point, TrackMarkerProperties> = {
     type: 'FeatureCollection',
     features: [],
 };
@@ -80,13 +82,35 @@ export function attachTrackLayers(map: MaplibreMap): void {
     });
 }
 
-export function renderTracks(map: MaplibreMap, tracks: TrackState[]): void {
+export function renderTracks(
+    map: MaplibreMap,
+    tracks: TrackState[],
+    isDone: (track: Track) => boolean,
+): void {
     const source = map.getSource(TRACK_LINES_SOURCE) as GeoJSONSource | undefined;
     if (!source) {
         // Style still loading; the style.load handler renders again.
         return;
     }
-    source.setData(buildLineFeatures(tracks));
+    source.setData(buildLineFeatures(tracks, isDone));
+}
+
+/**
+ * Moves the playhead markers. Called on every animation frame while playing and
+ * once whenever the track set changes, which is why it takes the clock's own
+ * time lookup rather than a timestamp: the clock owns the shared-origin
+ * arithmetic and there is only one copy of it.
+ */
+export function renderMarkers(
+    map: MaplibreMap,
+    tracks: TrackState[],
+    trackTimeMs: (track: Track) => number,
+): void {
+    const source = map.getSource(TRACK_MARKERS_SOURCE) as GeoJSONSource | undefined;
+    if (!source) {
+        return;
+    }
+    source.setData(buildMarkerFeatures(tracks, trackTimeMs));
 }
 
 export function fitTracksInView(map: MaplibreMap, bounds: Bounds, maxZoom = 15): void {

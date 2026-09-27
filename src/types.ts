@@ -43,5 +43,4 @@ export type AlignMode = 'perTrackStart' | 'globalEarliest';
 export interface TrackState {
     track: Track;
     visible: boolean;
-    done: boolean;
 }
