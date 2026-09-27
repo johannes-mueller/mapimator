@@ -45,6 +45,15 @@ export interface ChartState {
     metric: Metric;
     /** One entry per profile actually drawn, in legend order. */
     trackIds: string[];
+    /**
+     * True when runs are loaded but every one of them is switched off in the
+     * legend. It is a different state from having no runs at all, and it has to
+     * read differently: "no chart yet" would be a lie about runs that are loaded
+     * and only hidden.
+     */
+    allHidden: boolean;
+    /** The placeholder text actually on screen, which is what explains the state. */
+    placeholder: string;
     dots: ChartDot[];
     xMax: number;
     yMin: number;
@@ -89,6 +98,8 @@ export function createChart(
     let states: TrackState[] = [];
     let metric: Metric = 'elevation';
     let drawn: Drawn[] = [];
+    let allHidden = false;
+    let placeholder = 'The chart appears once a run is loaded.';
     let width = 0;
     let height = 0;
     let xMax = 0;
@@ -127,13 +138,16 @@ export function createChart(
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('class', 'chart-plot');
     svg.setAttribute('role', 'img');
-    const describe = (count: number): void => {
+    const ALL_HIDDEN = 'Every run is switched off. Turn one on in the legend to draw it.';
+    const describe = (count: number, hidden: boolean): void => {
         const quantity = metric === 'elevation' ? 'Elevation' : 'Speed';
         svg.setAttribute(
             'aria-label',
-            count === 0
-                ? 'No chart yet'
-                : `${quantity} against distance for ${count} track${count === 1 ? '' : 's'}. Click to seek.`,
+            hidden
+                ? 'No chart, because every run is switched off'
+                : count === 0
+                  ? 'No chart yet'
+                  : `${quantity} against distance for ${count} run${count === 1 ? '' : 's'}. Click to seek.`,
         );
     };
 
@@ -147,7 +161,7 @@ export function createChart(
 
     const empty = document.createElement('p');
     empty.className = 'placeholder';
-    empty.textContent = 'The chart appears once a track is loaded.';
+    empty.textContent = 'The chart appears once a run is loaded.';
 
     const plotWrap = document.createElement('div');
     plotWrap.className = 'chart-plot-wrap';
@@ -362,10 +376,13 @@ export function createChart(
         // The placeholder is the *empty* state, so it shows only when there is
         // nothing to plot. It is also given no box of its own, so leaving it in
         // while a chart is drawn would push the plot down and squash it.
+        allHidden = states.length > 0 && drawn.length === 0;
+        placeholder = allHidden ? ALL_HIDDEN : 'The chart appears once a run is loaded.';
+        empty.textContent = placeholder;
         setHidden(empty, drawn.length > 0);
         setHidden(svg, drawn.length === 0);
         setHidden(controls, drawn.length === 0);
-        describe(drawn.length);
+        describe(drawn.length, allHidden);
 
         if (drawn.length === 0) {
             xMax = 0;
@@ -430,7 +447,7 @@ export function createChart(
         for (const [id, button] of buttons) {
             button.setAttribute('aria-pressed', String(id === metric));
         }
-        describe(drawn.length);
+        describe(drawn.length, allHidden);
         for (const entry of drawn) {
             drawProfile(entry);
         }
@@ -513,6 +530,8 @@ export function createChart(
                 yLabels: axisLabels(),
                 xLabels: xAxisLabels(),
                 plot: p,
+                allHidden,
+                placeholder,
             };
         },
     };

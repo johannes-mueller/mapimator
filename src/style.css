@@ -232,6 +232,47 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
+.legend-item-hidden .legend-name,
+.legend-item-hidden .legend-meta,
+.legend-item-hidden .legend-readout {
+    opacity: 0.45;
+}
+
+.legend-item-hidden .legend-swatch {
+    opacity: 0.3;
+}
+
+.legend-toggle {
+    flex: none;
+    min-width: 46px;
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.legend-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+.legend-toggle[aria-pressed='false'] {
+    border-style: dashed;
+    color: var(--text-dim);
+}
+
+.legend-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
 .legend-remove {
     flex: none;
     width: 22px;

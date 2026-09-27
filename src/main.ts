@@ -141,6 +141,9 @@ const legend = createLegend(
     (id) => {
         store.remove(id);
     },
+    (id) => {
+        store.setVisible(id, !store.getById(id)?.visible);
+    },
     {
         // The per-track numbers come from the transport, which owns the clock,
         // rather than from a second copy of it here.
@@ -214,10 +217,7 @@ async function loadFiles(files: File[]): Promise<void> {
             'error',
         );
     } else if (addedCount > 0) {
-        dropzone.setStatus(
-            `Loaded ${addedCount} ${addedCount === 1 ? 'track' : 'tracks'}.`,
-            'info',
-        );
+        dropzone.setStatus(`Loaded ${addedCount} ${addedCount === 1 ? 'run' : 'runs'}.`, 'info');
     }
 }
 

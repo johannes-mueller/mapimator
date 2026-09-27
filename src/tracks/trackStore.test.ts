@@ -203,4 +203,91 @@ describe('createTrackStore', () => {
             expect(seen).toEqual([2, 1]);
         });
     });
+
+    describe('hiding a run', () => {
+        const twoRuns = () => {
+            const store = createTrackStore();
+            store.add([makeParsed('A'), makeParsed('B')]);
+            return store;
+        };
+        const visibility = (store: ReturnType<typeof createTrackStore>) =>
+            store.getAll().map((state) => state.visible);
+
+        it('hides one run and leaves the others alone', () => {
+            const store = twoRuns();
+            expect(store.setVisible(store.getAll()[0].track.id, false)).toBe(true);
+            expect(visibility(store)).toEqual([false, true]);
+        });
+
+        it('brings a hidden run back', () => {
+            const store = twoRuns();
+            const [first] = store.getAll();
+            store.setVisible(first.track.id, false);
+            expect(store.setVisible(first.track.id, true)).toBe(true);
+            expect(visibility(store)).toEqual([true, true]);
+        });
+
+        it('keeps a hidden run in the store, with its data intact', () => {
+            // Hiding is about what is drawn. A run that left the store would take
+            // its duration with it and shorten the run, which is the one thing
+            // this deliberately does not do.
+            const store = twoRuns();
+            const [first] = store.getAll();
+            store.setVisible(first.track.id, false);
+            expect(store.getAll()).toHaveLength(2);
+            expect(store.getById(first.track.id)?.track).toEqual(first.track);
+        });
+
+        it('leaves the run as long as the longest run in the store', () => {
+            const store = createTrackStore();
+            store.add([makeParsed('short', { durationMs: 1000 })]);
+            store.add([makeParsed('long', { durationMs: 9000 })]);
+            const longest = store
+                .getAll()
+                .reduce((a, b) => (a.track.durationMs >= b.track.durationMs ? a : b));
+            store.setVisible(longest.track.id, false);
+            expect(Math.max(...store.getAll().map((s) => s.track.durationMs))).toBe(9000);
+        });
+
+        it('does nothing for a run that is not there', () => {
+            const store = twoRuns();
+            const listener = vi.fn();
+            store.subscribe(listener);
+            expect(store.setVisible('track-999', false)).toBe(false);
+            expect(visibility(store)).toEqual([true, true]);
+            expect(listener).not.toHaveBeenCalled();
+        });
+
+        it('does not notify when a run is already how it was asked to be', () => {
+            // Every notify rebuilds the legend rows, and the legend goes out of
+            // its way to write them in place, so a notify that changed nothing
+            // would undo the one thing it was built to avoid.
+            const store = twoRuns();
+            const listener = vi.fn();
+            store.subscribe(listener);
+            expect(store.setVisible(store.getAll()[0].track.id, true)).toBe(false);
+            expect(store.setVisible(store.getAll()[0].track.id, false)).toBe(true);
+            expect(store.setVisible(store.getAll()[0].track.id, false)).toBe(false);
+            expect(listener).toHaveBeenCalledTimes(1);
+        });
+
+        it('can still remove a run that is hidden', () => {
+            const store = twoRuns();
+            const [first] = store.getAll();
+            store.setVisible(first.track.id, false);
+            store.remove(first.track.id);
+            expect(store.getAll()).toHaveLength(1);
+            expect(store.getAll()[0].track.name).toBe('B');
+        });
+
+        it('notifies once per real change', () => {
+            const store = twoRuns();
+            const listener = vi.fn();
+            store.subscribe(listener);
+            const [first, second] = store.getAll();
+            store.setVisible(first.track.id, false);
+            store.setVisible(second.track.id, false);
+            expect(listener).toHaveBeenCalledTimes(2);
+        });
+    });
 });

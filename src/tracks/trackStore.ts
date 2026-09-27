@@ -15,6 +15,17 @@ export interface TrackStore {
      * arrives after the rider has removed the file.
      */
     updateElevation: (id: string, ele: Float32Array) => boolean;
+    /**
+     * Shows or hides a track, leaving it in the run. Returns false when there is
+     * no such track, or when it already had that visibility, so a caller can tell
+     * a change worth redrawing for from one that is not.
+     *
+     * Hiding is deliberately only about what is drawn. The run keeps its length,
+     * because a timeline that changed under you when you clicked an eye icon
+     * would make the same moment in the run mean two different things, and this
+     * app exists to compare runs against each other.
+     */
+    setVisible: (id: string, visible: boolean) => boolean;
     remove: (id: string) => void;
     clear: () => void;
     getCombinedBounds: () => Bounds | null;
@@ -70,6 +81,21 @@ export function createTrackStore(): TrackStore {
         return true;
     };
 
+    const setVisible = (id: string, visible: boolean): boolean => {
+        const state = states.find((candidate) => candidate.track.id === id);
+        // Already how it was asked to be, so there is nothing to redraw and
+        // nobody needs telling. A notify here would rebuild every legend row,
+        // which is the one thing the legend goes out of its way not to do.
+        if (!state || state.visible === visible) {
+            return false;
+        }
+        states = states.map((candidate) =>
+            candidate === state ? { ...candidate, visible } : candidate,
+        );
+        notify();
+        return true;
+    };
+
     const remove = (id: string): void => {
         const next = states.filter((state) => state.track.id !== id);
         if (next.length === states.length) {
@@ -111,6 +137,7 @@ export function createTrackStore(): TrackStore {
         getById: (id) => states.find((state) => state.track.id === id),
         add,
         updateElevation,
+        setVisible,
         remove,
         clear,
         getCombinedBounds,

@@ -296,7 +296,7 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     suite.check('it starts on elevation', loaded.metric === 'elevation');
     suite.check(
         'and names itself for a screen reader',
-        loaded.label === 'Elevation against distance for 2 tracks. Click to seek.',
+        loaded.label === 'Elevation against distance for 2 runs. Click to seek.',
         JSON.stringify(loaded.label),
     );
 
@@ -444,7 +444,7 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     suite.check('the chart is on speed now', speed.metric === 'speed');
     suite.check(
         'and the name follows the quantity it is drawing',
-        speed.label === 'Speed against distance for 2 tracks. Click to seek.',
+        speed.label === 'Speed against distance for 2 runs. Click to seek.',
         JSON.stringify(speed.label),
     );
     suite.check(

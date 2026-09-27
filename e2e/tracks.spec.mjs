@@ -97,7 +97,7 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     const rows0 = await page.locator('.legend-item').count();
     const emptyText = (await page.locator('#legend-region').innerText()).trim();
     suite.check('no legend rows initially', rows0 === 0, `rows=${rows0}`);
-    suite.check('empty-state message shown', /no tracks yet/i.test(emptyText), emptyText);
+    suite.check('empty-state message shown', /no runs yet/i.test(emptyText), emptyText);
     const f0 = await page.evaluate(features);
     suite.check('lines source exists and is empty', f0?.count === 0, String(f0?.count));
 
