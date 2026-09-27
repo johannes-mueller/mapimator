@@ -1,0 +1,66 @@
+name: Deploy to GitHub Pages
+
+on:
+    push:
+        branches: [master]
+    workflow_dispatch:
+
+# Only one Pages deployment at a time; a push that lands mid-deploy waits for
+# the one in flight rather than racing it, and nothing is cancelled part-way.
+concurrency:
+    group: pages
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    # The same check a PR gets (test.yml), called rather than copied, so a push
+    # to master is held to the exact same bar and not a second, looser copy of
+    # it. A third-party host being down fails this job rather than letting an
+    # unchecked build reach Pages — re-running the workflow is the fix, the same
+    # as it would be locally.
+    test:
+        uses: ./.github/workflows/test.yml
+
+    deploy:
+        needs: test
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            pages: write
+            id-token: write
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+
+            - name: Set up Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            # A separate build from the test job's, deliberately: this runner's
+            # dist/ is what actually ships, so it is built fresh rather than passed
+            # across jobs, and there is nothing between this build and the deploy
+            # below that could let the two drift apart.
+            - name: Build
+              run: npm run build
+
+            - name: Configure Pages
+              uses: actions/configure-pages@v6
+
+            - name: Upload dist/ as the Pages artifact
+              uses: actions/upload-pages-artifact@v5
+              with:
+                  path: ./dist
+
+            - name: Deploy to GitHub Pages
+              id: deployment
+              uses: actions/deploy-pages@v5

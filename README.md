@@ -110,6 +110,16 @@ Two deployment notes:
 - **Serve over HTTPS** (or `localhost`). The MapLibre worker is bundled and served from your own origin, so a Content Security Policy only needs `worker-src 'self'` — no `blob:` exception is required, which is only needed when loading MapLibre from a CDN.
 - A single-page app needs no history fallback; `index.html` at the root is enough.
 
+### GitHub Pages, kept in sync by two workflows
+
+**`.github/workflows/test.yml`** runs the full check suite — typecheck, unit tests, a build, and the E2E suite in a real browser — against every pull request into `master`. It is also a **reusable workflow** (`on: workflow_call`), so it is called rather than copied wherever else the same bar is needed, which today is the deploy workflow below.
+
+**`.github/workflows/deploy.yml`** runs on every push to `master`, and its first job calls `test.yml` before doing anything else — the same check a PR gets, run again against the actual merge commit rather than trusted to have already covered it. Only once that passes does the second job build its own fresh copy of `dist/` and publish it, so a third-party tile host being briefly unreachable delays a deploy rather than shipping something the suite never actually checked. `workflow_dispatch` is there too, for a manual re-run without an empty commit.
+
+The deploy job's build is deliberately its own, separate from the one `test.yml` did to prove the build succeeds: it builds fresh on its own runner rather than reusing an artifact handed between jobs, so what ships is never more than one build step removed from what was just checked.
+
+**One manual, one-time step neither workflow can do for you:** in the repository's **Settings → Pages**, set **Build and deployment → Source** to **GitHub Actions**. Until that is set, `deploy.yml`'s build and test steps still run (and still gate on failure), but the deploy step has nothing to publish to.
+
 ## Basemaps and attribution
 
 All five styles are vector styles from OpenFreeMap, built on OpenMapTiles and OpenStreetMap data. OpenStreetMap data is licensed **ODbL**, so crediting it is a licence requirement, not a courtesy — the attribution is rendered by MapLibre's `AttributionControl` and is read from the tileset's TileJSON, so it stays correct if the upstream data changes.
@@ -124,6 +134,8 @@ vite.config.ts                build config (relative base, es2022, ES workers)
 vitest.config.ts              unit test config (src/**, e2e/harness.test.mjs, Node env)
 tsconfig.json                 strict TypeScript, bundler module resolution
 AGENTS.md                     working agreements, including the verification rule
+.github/workflows/test.yml     test:all — a PR check, and reusable by deploy.yml
+.github/workflows/deploy.yml   calls test.yml, then deploys dist/ to GitHub Pages
 .prettierrc                   formatter settings
 .editorconfig                 indentation rules for editors that support it
 public/favicon.svg
