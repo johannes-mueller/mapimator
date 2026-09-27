@@ -4,7 +4,6 @@ import type { Bounds, Track, TrackState } from '../types';
 import type { TrackLineProperties } from '../tracks/lineFeatures';
 import { buildLineFeatures } from '../tracks/lineFeatures';
 import type { TrackMarkerProperties } from '../playback/markerFeatures';
-import { buildMarkerFeatures } from '../playback/markerFeatures';
 
 export const TRACK_LINES_SOURCE = 'track-lines';
 export const TRACK_MARKERS_SOURCE = 'track-markers';
@@ -98,13 +97,21 @@ export function renderTracks(
 /**
  * Moves the playhead markers. Called on every animation frame while playing and
  * once whenever the track set changes.
+ *
+ * Takes the features already built rather than the tracks and elapsed time, so
+ * a caller that also needs the positions — anything reading where a marker
+ * actually is on screen — computes them once and shares the result, rather
+ * than risking a second computation that drifts from what got drawn.
  */
-export function renderMarkers(map: MaplibreMap, tracks: TrackState[], elapsedMs: number): void {
+export function renderMarkers(
+    map: MaplibreMap,
+    markers: FeatureCollection<Point, TrackMarkerProperties>,
+): void {
     const source = map.getSource(TRACK_MARKERS_SOURCE) as GeoJSONSource | undefined;
     if (!source) {
         return;
     }
-    source.setData(buildMarkerFeatures(tracks, elapsedMs));
+    source.setData(markers);
 }
 
 export function fitTracksInView(map: MaplibreMap, bounds: Bounds, maxZoom = 15): void {

@@ -1,6 +1,7 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { TrackState } from '../types';
 import { renderMarkers, renderTracks } from '../map/trackLayers';
+import { buildMarkerFeatures } from '../playback/markerFeatures';
 import { createPlaybackClock } from '../playback/clock';
 import type { PlaybackClock } from '../playback/clock';
 import { formatDuration } from '../format';
@@ -153,7 +154,8 @@ export function createTransport(options: TransportOptions): TransportHandle {
 
     const render = (withLines: boolean): void => {
         const tracks = getTracks();
-        renderMarkers(map, tracks, clock.getElapsedMs());
+        const markers = buildMarkerFeatures(tracks, clock.getElapsedMs());
+        renderMarkers(map, markers);
         const key = doneKey(tracks);
         if (withLines || key !== lastDoneKey) {
             lastDoneKey = key;
