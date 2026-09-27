@@ -421,31 +421,71 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     await page.evaluate(() => document.activeElement?.blur?.());
 
     suite.section('SPEED');
-    // Both windows are the same length of real time, so the ratio of how far the
-    // playhead travelled is the multiplier, whatever the machine's frame rate did.
+    // The multiplier is a claim about arithmetic — every frame's real delta,
+    // times the speed — so it is checked as arithmetic rather than by timing two
+    // windows from outside the browser.
+    //
+    // Timing two windows cannot work. The clock only advances when a frame runs,
+    // so getElapsedMs() reports the last frame's value: a stall between a frame
+    // and the read loses whatever those frames have not yet accounted for. Each
+    // window was also a separate round trip, and page.waitForTimeout(400) is not
+    // 400 ms of the browser's time. The two windows therefore never matched, and
+    // the tolerance had to be 15 to 240 to cover the drift — a band wide enough
+    // to pass a clock that was wrong by a factor of ten. Under load it failed
+    // anyway, reporting a ratio of 13, which said nothing at all about the speed.
+    //
+    // Sampling on a frame removes both errors. The rAF timestamp handed to this
+    // callback is the same value the clock was ticked with, and the clock's
+    // deltas sum to exactly the span between two of them however many frames were
+    // dropped in between, because a dropped frame is simply a longer delta. So
+    // real time and clock time are bracketed by the same pair of instants, and
+    // the rate comes out as the speed exactly. A slow machine changes how long
+    // the windows take and nothing about the answer.
+    const sample = () =>
+        page.evaluate(
+            () =>
+                new Promise((resolve) => {
+                    requestAnimationFrame((frameMs) => {
+                        resolve({
+                            real: frameMs,
+                            sim: window.mapimator.playback.getElapsedMs(),
+                        });
+                    });
+                }),
+        );
+
     const runFor = async (ms) => {
         await page.evaluate(() => window.mapimator.playback.seek(0));
         await page.evaluate(() => window.mapimator.playback.play());
-        const start = await page.evaluate(() => window.mapimator.playback.getElapsedMs());
+        const start = await sample();
         await page.waitForTimeout(ms);
-        const end = await page.evaluate(() => window.mapimator.playback.getElapsedMs());
+        const end = await sample();
         await page.evaluate(() => window.mapimator.playback.pause());
-        return end - start;
+        return { sim: end.sim - start.sim, real: end.real - start.real };
     };
+
+    // Simulated milliseconds per real millisecond: one at 1x, sixty at 60x.
+    const rate = (window_) => window_.sim / window_.real;
 
     await page.selectOption('#speed-select', '1');
     const at1x = await runFor(400);
     await page.selectOption('#speed-select', '60');
     const at60x = await runFor(400);
-    const ratio = at1x > 0 ? at60x / at1x : 0;
     suite.check(
         'the select reports the speed the clock is running at',
         (await page.evaluate(transportState)).speed === 60,
     );
     suite.check(
+        'at 1x the clock runs at real time',
+        Math.abs(rate(at1x) - 1) < 0.01,
+        `1x rate ${rate(at1x).toFixed(4)} over ${at1x.real.toFixed(0)}ms`,
+    );
+    suite.check(
         'sixty times the rate moves the playhead sixty times as far',
-        ratio > 15 && ratio < 240,
-        `1x ${at1x}ms, 60x ${at60x}ms, ratio ${ratio.toFixed(1)}`,
+        Math.abs(rate(at60x) / rate(at1x) - 60) < 0.5,
+        `1x ${rate(at1x).toFixed(4)}, 60x ${rate(at60x).toFixed(4)}, ratio ${(
+            rate(at60x) / rate(at1x)
+        ).toFixed(2)}`,
     );
 
     // A change of speed is a choice about the next run too, not just this one.
