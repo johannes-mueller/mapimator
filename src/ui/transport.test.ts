@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createTransport } from './transport';
+import { createTransport, TIMELINE_STEPS, timelineStep } from './transport';
+import { MAX_SPEED } from '../playback/clock';
 import type { Track, TrackState } from '../types';
 
 const S = 1000;
 const M = 60_000;
 const H = 3_600_000;
+const MINUTE = 60_000;
 
 const makeTrack = (
     id: string,
@@ -55,6 +57,7 @@ const state = (track: Track, visible = true): TrackState => ({ track, visible })
 const fakeButton = () => {
     const listeners = new Map<string, (() => void)[]>();
     const element = {
+        tagName: 'BUTTON',
         textContent: '',
         disabled: false,
         attrs: new Map<string, string>(),
@@ -77,6 +80,109 @@ const fakeButton = () => {
         },
     };
     return element;
+};
+
+/** Just enough of a range input for the scrub wiring. */
+const fakeRange = () => {
+    const listeners = new Map<string, (() => void)[]>();
+    const element = {
+        tagName: 'INPUT',
+        value: '0',
+        min: '0',
+        max: '0',
+        step: '1',
+        disabled: false,
+        attrs: new Map<string, string>(),
+        addEventListener: (type: string, listener: () => void) => {
+            listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+        },
+        removeEventListener: (type: string, listener: () => void) => {
+            listeners.set(
+                type,
+                (listeners.get(type) ?? []).filter((l) => l !== listener),
+            );
+        },
+        setAttribute: (name: string, value: string) => {
+            element.attrs.set(name, value);
+        },
+        /** Moves the handle and fires `input`, as a drag or an arrow key would. */
+        slide: (value: number | string): void => {
+            element.value = String(value);
+            for (const listener of listeners.get('input') ?? []) {
+                listener();
+            }
+        },
+    };
+    return element;
+};
+
+/** Just enough of a select for the speed wiring. */
+const fakeSelect = () => {
+    const listeners = new Map<string, (() => void)[]>();
+    const element = {
+        tagName: 'SELECT',
+        value: '1',
+        disabled: false,
+        addEventListener: (type: string, listener: () => void) => {
+            listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+        },
+        removeEventListener: (type: string, listener: () => void) => {
+            listeners.set(
+                type,
+                (listeners.get(type) ?? []).filter((l) => l !== listener),
+            );
+        },
+        /** Picks an option and fires `change`, as a real selection would. */
+        choose: (value: string): void => {
+            element.value = value;
+            for (const listener of listeners.get('change') ?? []) {
+                listener();
+            }
+        },
+    };
+    return element;
+};
+
+/** A key event the transport can read without a DOM. */
+interface FakeKeyEvent {
+    key: string;
+    shiftKey: boolean;
+    target: unknown;
+    defaultPrevented: boolean;
+    preventDefault: () => void;
+}
+
+const fakeKeyTarget = () => {
+    const listeners: ((event: FakeKeyEvent) => void)[] = [];
+    return {
+        listeners,
+        addEventListener: (type: string, listener: (event: FakeKeyEvent) => void) => {
+            if (type === 'keydown') {
+                listeners.push(listener);
+            }
+        },
+        removeEventListener: (_type: string, listener: (event: FakeKeyEvent) => void) => {
+            const at = listeners.indexOf(listener);
+            if (at >= 0) {
+                listeners.splice(at, 1);
+            }
+        },
+        press: (key: string, options: { shiftKey?: boolean; target?: unknown } = {}) => {
+            const event: FakeKeyEvent = {
+                key,
+                shiftKey: options.shiftKey ?? false,
+                target: options.target ?? null,
+                defaultPrevented: false,
+                preventDefault: () => {
+                    event.defaultPrevented = true;
+                },
+            };
+            for (const listener of [...listeners]) {
+                listener(event);
+            }
+            return event;
+        },
+    };
 };
 
 /** A frame loop the test can step by hand, standing in for rAF. */
@@ -131,6 +237,9 @@ interface RenderedFeature {
 const harness = (initial: TrackState[] = []) => {
     const button = fakeButton();
     const clockElement = { textContent: '' };
+    const speedSelect = fakeSelect();
+    const timeline = fakeRange();
+    const keys = fakeKeyTarget();
     const data = new Map<string, unknown[]>();
     const map = {
         getSource: (id: string) => {
@@ -147,6 +256,9 @@ const harness = (initial: TrackState[] = []) => {
         map,
         playButton: button as unknown as HTMLButtonElement,
         clockElement: clockElement as unknown as HTMLElement,
+        speedSelect: speedSelect as unknown as HTMLSelectElement,
+        timeline: timeline as unknown as HTMLInputElement,
+        keyTarget: keys as unknown as EventTarget,
         getTracks: () => tracks,
         requestFrame: frames.requestFrame,
         cancelFrame: frames.cancelFrame,
@@ -162,6 +274,9 @@ const harness = (initial: TrackState[] = []) => {
         transport,
         button,
         clockElement,
+        speedSelect,
+        timeline,
+        keys,
         frames,
         setTracks: (next: TrackState[]) => {
             tracks = next;
@@ -439,5 +554,299 @@ describe('createTransport', () => {
             expect(h.clockElement.textContent).toBe('0:00 / 0:00');
             expect(h.button.disabled).toBe(true);
         });
+    });
+});
+
+describe('timelineStep', () => {
+    it('divides a run into a fixed number of addressable positions', () => {
+        // Otherwise a step of 1 ms would make the arrow keys useless on a
+        // focused timeline: a hundred presses to cross a ten-second gap.
+        expect(timelineStep(MINUTE)).toBe(60);
+        expect(timelineStep(33 * H)).toBe(Math.round((33 * H) / 1000));
+    });
+
+    it('takes a thousand presses to cross the whole run, whatever its length', () => {
+        for (const total of [4 * M, MINUTE, H, 33 * H]) {
+            const presses = Math.ceil(total / timelineStep(total));
+            expect(presses).toBeGreaterThanOrEqual(TIMELINE_STEPS);
+            expect(presses).toBeLessThanOrEqual(TIMELINE_STEPS + 1);
+        }
+    });
+
+    it('never steps below one millisecond', () => {
+        expect(timelineStep(1)).toBe(1);
+        expect(timelineStep(0)).toBe(1);
+        expect(timelineStep(-5)).toBe(1);
+    });
+});
+
+describe('the speed control', () => {
+    it('is disabled until there is something to play', () => {
+        expect(harness().speedSelect.disabled).toBe(true);
+        expect(harness([state(minuteTrack())]).speedSelect.disabled).toBe(false);
+    });
+
+    it('runs the animation at the chosen rate', () => {
+        const h = harness([state(minuteTrack())]);
+        h.transport.play();
+        h.frames.runFrames(6, 0, 100);
+        expect(h.transport.getElapsedMs()).toBe(500);
+
+        const fast = harness([state(minuteTrack())]);
+        fast.speedSelect.choose('20');
+        fast.transport.play();
+        fast.frames.runFrames(6, 0, 100);
+        // Same six frames of real time, twenty times as far along the ride.
+        expect(fast.transport.getElapsedMs()).toBe(10_000);
+        expect(fast.transport.getSpeed()).toBe(20);
+    });
+
+    it('clamps to the supported range', () => {
+        const h = harness([state(minuteTrack())]);
+        h.speedSelect.choose('9999');
+        expect(h.transport.getSpeed()).toBe(MAX_SPEED);
+        expect(h.speedSelect.value).toBe(String(MAX_SPEED));
+    });
+
+    it('corrects a value the clock refuses instead of leaving a lie on screen', () => {
+        const h = harness([state(minuteTrack())]);
+        h.speedSelect.choose('60');
+        // An unknown option reports no value at all, which reaches the clock as
+        // zero and is refused. The speed keeps what it was rather than being
+        // thrown away by a stray keystroke, and the control is written back so it
+        // cannot claim a speed the animation is not running at.
+        h.speedSelect.choose('');
+        expect(h.transport.getSpeed()).toBe(60);
+        expect(h.speedSelect.value).toBe('60');
+    });
+
+    it('corrects a tampered value that is not a number', () => {
+        const h = harness([state(minuteTrack())]);
+        h.speedSelect.value = 'quickly';
+        h.speedSelect.choose('quickly');
+        expect(h.transport.getSpeed()).toBe(1);
+        expect(h.speedSelect.value).toBe('1');
+    });
+
+    it('survives a pause', () => {
+        const h = harness([state(minuteTrack())]);
+        h.speedSelect.choose('120');
+        h.transport.pause();
+        h.transport.play();
+        h.frames.runFrames(3, 0, 100);
+        expect(h.transport.getSpeed()).toBe(120);
+        expect(h.transport.getElapsedMs()).toBe(200 * 120);
+    });
+
+    it('survives a scrub', () => {
+        const h = harness([state(minuteTrack())]);
+        h.speedSelect.choose('5');
+        h.timeline.slide(30_000);
+        expect(h.transport.getElapsedMs()).toBe(30_000);
+        expect(h.transport.getSpeed()).toBe(5);
+    });
+
+    it('survives a change of tracks', () => {
+        const h = harness([state(minuteTrack())]);
+        h.speedSelect.choose('60');
+        h.setTracks([state(minuteTrack('b', 0))]);
+        expect(h.transport.getSpeed()).toBe(60);
+    });
+});
+
+describe('the timeline', () => {
+    it('is disabled until there is something to play', () => {
+        expect(harness().timeline.disabled).toBe(true);
+        expect(harness([state(minuteTrack())]).timeline.disabled).toBe(false);
+    });
+
+    it('spans the whole run', () => {
+        const h = harness([state(minuteTrack())]);
+        expect(h.timeline.max).toBe(String(MINUTE));
+        expect(h.timeline.step).toBe(String(timelineStep(MINUTE)));
+    });
+
+    it('follows the playhead', () => {
+        const h = harness([state(minuteTrack())]);
+        h.timeline.slide(20_000);
+        expect(h.timeline.value).toBe('20000');
+    });
+
+    it('announces a readable position rather than milliseconds', () => {
+        const h = harness([state(minuteTrack())]);
+        h.timeline.slide(65_000 / 2);
+        expect(h.timeline.attrs.get('aria-valuetext')).toBe('0:33 of 1:00');
+    });
+
+    it('scrubs as the handle is dragged, not only on release', () => {
+        const h = harness([state(minuteTrack())]);
+        h.timeline.slide(45_000);
+        expect(h.transport.getElapsedMs()).toBe(45_000);
+        h.timeline.slide(10_000);
+        expect(h.transport.getElapsedMs()).toBe(10_000);
+    });
+
+    it('moves every marker while scrubbing', () => {
+        const h = harness([state(minuteTrack())]);
+        h.timeline.slide(MINUTE);
+        expect(h.markers()[0]?.geometry.coordinates).toEqual([5, 47]);
+    });
+
+    it('is not fought by the playhead repainting the handle', () => {
+        // A value write during a drag would snap the handle back under the
+        // pointer, so the render must leave an unchanged value alone.
+        const h = harness([state(minuteTrack())]);
+        h.timeline.slide(45_000);
+        expect(h.timeline.value).toBe('45000');
+        h.timeline.slide(45_000);
+        expect(h.timeline.value).toBe('45000');
+    });
+
+    it('keeps playing through a scrub', () => {
+        const h = harness([state(minuteTrack())]);
+        h.transport.play();
+        h.timeline.slide(30_000);
+        expect(h.transport.isPlaying()).toBe(true);
+        // The clock rebaselines on the next frame rather than counting the
+        // interval between the last frame and the seek.
+        h.frames.runFrames(2, 0, 100);
+        expect(h.transport.getElapsedMs()).toBe(30_100);
+    });
+});
+
+describe('keyboard transport', () => {
+    const loaded = () => harness([state(minuteTrack())]);
+
+    it('toggles on space and on k', () => {
+        const h = loaded();
+        h.keys.press(' ');
+        expect(h.transport.isPlaying()).toBe(true);
+        h.keys.press(' ');
+        expect(h.transport.isPlaying()).toBe(false);
+
+        h.keys.press('k');
+        expect(h.transport.isPlaying()).toBe(true);
+    });
+
+    it('stops the page scrolling on a key it acts on', () => {
+        expect(loaded().keys.press(' ').defaultPrevented).toBe(true);
+        expect(loaded().keys.press('a').defaultPrevented).toBe(false);
+    });
+
+    it('steps a percent of the run per arrow press', () => {
+        const h = loaded();
+        h.timeline.slide(0);
+        h.keys.press('ArrowRight');
+        expect(h.transport.getElapsedMs()).toBe(MINUTE * 0.01);
+        h.keys.press('ArrowRight');
+        expect(h.transport.getElapsedMs()).toBe(MINUTE * 0.02);
+        h.keys.press('ArrowLeft');
+        expect(h.transport.getElapsedMs()).toBe(MINUTE * 0.01);
+    });
+
+    it('steps five percent with shift', () => {
+        const h = loaded();
+        h.keys.press('ArrowRight', { shiftKey: true });
+        expect(h.transport.getElapsedMs()).toBe(MINUTE * 0.05);
+    });
+
+    it('clamps a step that would run off either end', () => {
+        const h = loaded();
+        h.keys.press('ArrowLeft');
+        expect(h.transport.getElapsedMs()).toBe(0);
+        h.keys.press('End');
+        expect(h.transport.getElapsedMs()).toBe(MINUTE);
+        h.keys.press('ArrowRight', { shiftKey: true });
+        expect(h.transport.getElapsedMs()).toBe(MINUTE);
+    });
+
+    it('jumps to the ends of the run', () => {
+        const h = loaded();
+        h.keys.press('End');
+        expect(h.transport.getElapsedMs()).toBe(MINUTE);
+        h.keys.press('Home');
+        expect(h.transport.getElapsedMs()).toBe(0);
+    });
+
+    it('leaves a focused button alone, so space does not toggle twice', () => {
+        const h = loaded();
+        // Space on a focused button fires a click, which already toggles.
+        h.keys.press(' ', { target: { tagName: 'BUTTON' } });
+        expect(h.transport.isPlaying()).toBe(false);
+    });
+
+    it('leaves a focused timeline its own arrows, which already seek', () => {
+        const h = loaded();
+        h.keys.press('ArrowRight', { target: h.timeline });
+        expect(h.transport.getElapsedMs()).toBe(0);
+    });
+
+    it('still takes space from a focused timeline', () => {
+        // A range ignores Space, so without this the page would scroll and the
+        // play button would be unreachable once a drag had left focus here.
+        const h = loaded();
+        expect(h.keys.press(' ', { target: h.timeline }).defaultPrevented).toBe(true);
+        expect(h.transport.isPlaying()).toBe(true);
+    });
+
+    it('does not type into the file picker or scrub from it', () => {
+        const h = loaded();
+        h.keys.press('k', { target: { tagName: 'INPUT' } });
+        h.keys.press('ArrowRight', { target: { tagName: 'SELECT' } });
+        expect(h.transport.isPlaying()).toBe(false);
+        expect(h.transport.getElapsedMs()).toBe(0);
+    });
+
+    it('does nothing with no tracks loaded', () => {
+        const h = harness();
+        h.keys.press('End');
+        h.keys.press(' ');
+        expect(h.transport.getElapsedMs()).toBe(0);
+        expect(h.transport.isPlaying()).toBe(false);
+    });
+});
+
+describe('subscribers', () => {
+    it('are told about every redraw', () => {
+        const h = harness([state(minuteTrack())]);
+        let calls = 0;
+        h.transport.subscribe(() => {
+            calls += 1;
+        });
+        h.transport.seek(1000);
+        expect(calls).toBeGreaterThan(0);
+    });
+
+    it('are told when the track set changes', () => {
+        const h = harness();
+        let calls = 0;
+        h.transport.subscribe(() => {
+            calls += 1;
+        });
+        h.setTracks([state(minuteTrack())]);
+        expect(calls).toBeGreaterThan(0);
+    });
+
+    it('can unsubscribe', () => {
+        const h = harness([state(minuteTrack())]);
+        let calls = 0;
+        const stop = h.transport.subscribe(() => {
+            calls += 1;
+        });
+        h.transport.seek(1000);
+        const after = calls;
+        stop();
+        h.transport.seek(2000);
+        expect(calls).toBe(after);
+    });
+});
+
+describe('getTrackTime', () => {
+    it('projects the shared clock onto a track recorded later', () => {
+        // A track an hour into the run has its own hour still to do.
+        const later = minuteTrack('b', H);
+        const h = harness([state(minuteTrack('a', 0)), state(later)]);
+        h.transport.seek(H + 30_000);
+        expect(h.transport.getTrackTime(later)).toBe(30_000);
     });
 });

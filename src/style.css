@@ -330,6 +330,17 @@ body {
     opacity: 0.5;
 }
 
+/* Tabular figures are not decoration here: these numbers change sixty times a
+   second, and proportional digits make the row twitch sideways as the digits
+   change width. */
+.legend-readout {
+    display: block;
+    margin-top: 1px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+
 /* Keep MapLibre controls legible on the dark shell. */
 .maplibregl-ctrl-group {
     background: var(--panel-solid) !important;

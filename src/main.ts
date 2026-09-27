@@ -11,6 +11,7 @@ import { createDropzone } from './ui/dropzone';
 import { createLegend } from './ui/legend';
 import { createTransport } from './ui/transport';
 import type { TransportHandle } from './ui/transport';
+import { readoutText } from './playback/readout';
 
 declare global {
     interface Window {
@@ -47,6 +48,14 @@ function requireInput(id: string): HTMLInputElement {
     return element;
 }
 
+function requireSelect(id: string): HTMLSelectElement {
+    const element = requireElement<HTMLElement>(id);
+    if (!(element instanceof HTMLSelectElement)) {
+        throw new Error(`#${id} must be a <select>`);
+    }
+    return element;
+}
+
 const initialBasemapId = readStoredBasemapId();
 const view = createMapView(requireElement<HTMLElement>('map'), initialBasemapId);
 const store = createTrackStore();
@@ -56,6 +65,8 @@ const transport = createTransport({
     map: view.map,
     playButton: requireButton('play-toggle'),
     clockElement: requireElement<HTMLElement>('clock'),
+    speedSelect: requireSelect('speed-select'),
+    timeline: requireInput('timeline'),
     getTracks: () => store.getAll(),
 });
 
@@ -72,8 +83,20 @@ const switcher = createBasemapSwitcher(
     initialBasemapId,
 );
 
-const legend = createLegend(requireElement<HTMLElement>('legend-region'), (id) => {
-    store.remove(id);
+const legend = createLegend(
+    requireElement<HTMLElement>('legend-region'),
+    (id) => {
+        store.remove(id);
+    },
+    {
+        // The per-track numbers come from the transport, which owns the clock,
+        // rather than from a second copy of it here.
+        getTrackTime: (track) => transport.getTrackTime(track),
+        readout: readoutText,
+    },
+);
+transport.subscribe(() => {
+    legend.updateReadouts();
 });
 
 const dropzone = createDropzone({

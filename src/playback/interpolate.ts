@@ -20,6 +20,13 @@ export interface TrackPosition {
     progress: number;
     /** Index of the sample the position was derived from. */
     index: number;
+    /**
+     * How far between `index` and `index + 1` the position sits, 0 to 1. Zero
+     * whenever the position is held on a single sample — pending, parked, done,
+     * or two samples sharing a timestamp — because there is then no span to be
+     * partway across.
+     */
+    fraction: number;
 }
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -53,11 +60,11 @@ export function positionAt(track: Track, timeMs: number): TrackPosition {
     const timeS = timeMs / 1000;
 
     if (timeMs < 0) {
-        return { status: 'pending', ...sampleAt(track, 0), progress: 0 };
+        return { status: 'pending', ...sampleAt(track, 0), progress: 0, fraction: 0 };
     }
 
     if (timeMs >= track.durationMs) {
-        return { status: 'done', ...sampleAt(track, lastIndex), progress: 1 };
+        return { status: 'done', ...sampleAt(track, lastIndex), progress: 1, fraction: 0 };
     }
 
     // Reached only when `timeMs < durationMs`, so `durationMs > 0` holds here
@@ -68,14 +75,14 @@ export function positionAt(track: Track, timeMs: number): TrackPosition {
         // Only reachable if `durationMs` outruns the final sample, which the
         // parser cannot produce but which would otherwise read past the end of
         // every array and put a NaN marker on the map.
-        return { status: 'running', ...sampleAt(track, lastIndex), progress };
+        return { status: 'running', ...sampleAt(track, lastIndex), progress, fraction: 0 };
     }
     const to = from + 1;
 
     // A break at `to` means the span between these two samples is a recorded
     // pause rather than travel, so hold at `from` instead of crossing it.
     if (isSegmentStart(track, to)) {
-        return { status: 'parked', ...sampleAt(track, from), progress };
+        return { status: 'parked', ...sampleAt(track, from), progress, fraction: 0 };
     }
 
     // `to` is in range and its time is at or after `from`'s by construction of
@@ -92,7 +99,28 @@ export function positionAt(track: Track, timeMs: number): TrackPosition {
         ele: track.ele[from] + (track.ele[to] - track.ele[from]) * fraction,
         progress,
         index: from,
+        fraction,
     };
+}
+
+/**
+ * Cumulative distance in metres at a position, interpolated between the two
+ * samples it was derived from.
+ *
+ * `Track.dist` is the parser's running total, so `dist[index]` is the distance
+ * at that sample. Note that it is not reset at a segment break, which means the
+ * straight-line jump across a recorded pause is counted: the figure here lands
+ * exactly on the track's advertised `distanceM` at the end, which is what makes
+ * the two numbers agree in the legend.
+ */
+export function distanceAt(track: Track, position: TrackPosition): number {
+    const from = track.dist[position.index] ?? 0;
+    const to = position.index + 1;
+    if (position.fraction <= 0 || to >= track.dist.length) {
+        return from;
+    }
+    const next = track.dist[to];
+    return from + (next - from) * position.fraction;
 }
 
 function sampleAt(

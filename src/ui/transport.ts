@@ -1,9 +1,10 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type { TrackState } from '../types';
+import type { Track, TrackState } from '../types';
 import { renderMarkers, renderTracks } from '../map/trackLayers';
 import { createPlaybackClock } from '../playback/clock';
 import type { PlaybackClock } from '../playback/clock';
 import { formatDuration } from '../format';
+import { acceptsTransportKey, keyAction } from './transportKeys';
 
 const PLAY_ICON = '▶';
 const PAUSE_ICON = '❚❚';
@@ -12,8 +13,12 @@ export interface TransportOptions {
     map: MaplibreMap;
     playButton: HTMLButtonElement;
     clockElement: HTMLElement;
+    speedSelect: HTMLSelectElement;
+    timeline: HTMLInputElement;
     /** Read fresh on every change, so the controller never holds a stale list. */
     getTracks: () => TrackState[];
+    /** Where key presses are heard. The document by default; injected for tests. */
+    keyTarget?: EventTarget;
     /** Injected so the loop can be driven without a browser. */
     requestFrame?: (callback: (now: number) => void) => number;
     cancelFrame?: (handle: number) => void;
@@ -27,12 +32,36 @@ export interface TransportHandle {
     seek: (ms: number) => void;
     getElapsedMs: () => number;
     getTotalMs: () => number;
+    getSpeed: () => number;
+    /** The shared elapsed time projected onto one track's own timeline. */
+    getTrackTime: (track: Track) => number;
+    /** Called whenever the transport redraws, for readouts it does not own. */
+    subscribe: (listener: () => void) => () => void;
     /** Re-reads the track set and redraws; call when the store changes. */
     refresh: () => void;
     /** Redraws including the lines; call when the basemap style reloads, since
      *  the new style starts with empty sources. */
     redraw: () => void;
     dispose: () => void;
+}
+
+/** Roughly how many positions the timeline should be able to address. */
+export const TIMELINE_STEPS = 1000;
+
+/**
+ * The timeline's step, in milliseconds.
+ *
+ * A range input steps by `step`, so a step of 1 ms would make the arrow keys
+ * useless on a focused timeline — a hundred presses to cross a ten-second gap —
+ * and there is no such thing as a pixel-accurate millisecond on a slider a few
+ * hundred pixels wide anyway. Dividing the total into a fixed number of steps
+ * makes one key press a visible move on any length of ride.
+ */
+export function timelineStep(totalMs: number): number {
+    if (!(totalMs > 0)) {
+        return 1;
+    }
+    return Math.max(1, Math.round(totalMs / TIMELINE_STEPS));
 }
 
 /**
@@ -50,7 +79,10 @@ export function createTransport(options: TransportOptions): TransportHandle {
         map,
         playButton,
         clockElement,
+        speedSelect,
+        timeline,
         getTracks,
+        keyTarget = document,
         requestFrame = (callback) => requestAnimationFrame(callback),
         cancelFrame = (handle) => cancelAnimationFrame(handle),
     } = options;
@@ -58,15 +90,22 @@ export function createTransport(options: TransportOptions): TransportHandle {
     const clock: PlaybackClock = createPlaybackClock();
     let frame: number | null = null;
     let lastDoneKey: string | null = null;
+    let lastClockText: string | null = null;
+    let lastValueText: string | null = null;
+    const listeners = new Set<() => void>();
 
     /** Which tracks are finished, as a cheap comparable key. */
     const doneKey = (tracks: TrackState[]): string =>
         tracks.map((t) => (t.visible && clock.isTrackDone(t.track) ? '1' : '0')).join('');
 
     const updateReadout = (): void => {
-        const elapsed = formatDuration(clock.getElapsedMs());
-        const total = formatDuration(clock.getTotalMs());
-        clockElement.textContent = `${elapsed} / ${total}`;
+        const text = `${formatDuration(clock.getElapsedMs())} / ${formatDuration(clock.getTotalMs())}`;
+        // Written at most once per visible change: this runs on every frame, and
+        // replacing identical text still costs a layout pass.
+        if (text !== lastClockText) {
+            lastClockText = text;
+            clockElement.textContent = text;
+        }
     };
 
     const updateButton = (): void => {
@@ -75,6 +114,43 @@ export function createTransport(options: TransportOptions): TransportHandle {
         playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
         playButton.setAttribute('aria-pressed', String(playing));
         playButton.disabled = clock.getTotalMs() === 0;
+    };
+
+    const updateSpeed = (): void => {
+        // Written back from the clock rather than trusted from the event, so a
+        // value the clock refused (the select can be tampered with from the
+        // console, and an unknown option reports no value at all) cannot leave
+        // the control claiming a speed the animation is not running at.
+        const speed = String(clock.getSpeed());
+        if (speedSelect.value !== speed) {
+            speedSelect.value = speed;
+        }
+        speedSelect.disabled = clock.getTotalMs() === 0;
+    };
+
+    const updateTimeline = (): void => {
+        const total = clock.getTotalMs();
+        const elapsed = clock.getElapsedMs();
+        // Only written when it differs, so a drag is not fought by the playhead
+        // repainting the handle the pointer is holding.
+        if (timeline.max !== String(total)) {
+            timeline.max = String(total);
+        }
+        const step = String(timelineStep(total));
+        if (timeline.step !== step) {
+            timeline.step = step;
+        }
+        const value = String(elapsed);
+        if (timeline.value !== value) {
+            timeline.value = value;
+        }
+        const valueText = `${formatDuration(elapsed)} of ${formatDuration(total)}`;
+        if (valueText !== lastValueText) {
+            lastValueText = valueText;
+            // A screen reader would otherwise announce a bare millisecond count.
+            timeline.setAttribute('aria-valuetext', valueText);
+        }
+        timeline.disabled = total === 0;
     };
 
     const render = (withLines: boolean): void => {
@@ -87,6 +163,11 @@ export function createTransport(options: TransportOptions): TransportHandle {
         }
         updateReadout();
         updateButton();
+        updateSpeed();
+        updateTimeline();
+        for (const listener of listeners) {
+            listener();
+        }
     };
 
     const stopLoop = (): void => {
@@ -148,11 +229,56 @@ export function createTransport(options: TransportOptions): TransportHandle {
         }
     };
 
+    const seek = (ms: number): void => {
+        clock.seek(ms);
+        render(false);
+    };
+
+    const onSpeedChange = (): void => {
+        clock.setSpeed(Number(speedSelect.value));
+        // Written back from the clock, so a refused value corrects the control
+        // instead of leaving it lying about the rate.
+        updateSpeed();
+    };
+
+    const onTimelineInput = (): void => {
+        // `input` rather than `change`, so the map follows the pointer instead of
+        // jumping once on release. Scrubbing does not pause: the clock rebaselines
+        // on the next frame, so playback carries on from wherever it was dropped.
+        clock.seek(Number(timeline.value));
+        render(false);
+    };
+
+    const onKeyDown = (event: Event): void => {
+        const keyEvent = event as KeyboardEvent;
+        const action = keyAction(keyEvent.key, keyEvent.shiftKey, clock.getTotalMs());
+        if (!action) {
+            return;
+        }
+        if (!acceptsTransportKey(keyEvent.target, timeline, keyEvent.key)) {
+            return;
+        }
+        // Only for keys we act on: Space would otherwise scroll the page, and the
+        // rest are ours alone.
+        keyEvent.preventDefault();
+        if (action.kind === 'toggle') {
+            toggle();
+        } else if (action.kind === 'seek') {
+            seek(action.ms);
+        } else {
+            const total = clock.getTotalMs();
+            seek(clock.getElapsedMs() + (total * action.percent) / 100);
+        }
+    };
+
     clock.subscribe(() => {
         render(false);
     });
 
     playButton.addEventListener('click', toggle);
+    speedSelect.addEventListener('change', onSpeedChange);
+    timeline.addEventListener('input', onTimelineInput);
+    keyTarget.addEventListener('keydown', onKeyDown);
 
     // The clock has to know the track set before the first readout, or the
     // timeline would read as empty until the store happened to change.
@@ -164,12 +290,17 @@ export function createTransport(options: TransportOptions): TransportHandle {
         pause,
         toggle,
         isPlaying: () => clock.isPlaying(),
-        seek: (ms) => {
-            clock.seek(ms);
-            render(false);
-        },
+        seek,
         getElapsedMs: () => clock.getElapsedMs(),
         getTotalMs: () => clock.getTotalMs(),
+        getSpeed: () => clock.getSpeed(),
+        getTrackTime: (track: Track) => clock.getTrackTime(track),
+        subscribe: (listener: () => void) => {
+            listeners.add(listener);
+            return () => {
+                listeners.delete(listener);
+            };
+        },
         refresh: () => {
             clock.setTracks(getTracks().map((t) => t.track));
             // Clearing the tracks stops the clock, and the loop has to follow it
@@ -182,7 +313,11 @@ export function createTransport(options: TransportOptions): TransportHandle {
         },
         dispose: () => {
             stopLoop();
+            listeners.clear();
             playButton.removeEventListener('click', toggle);
+            speedSelect.removeEventListener('change', onSpeedChange);
+            timeline.removeEventListener('input', onTimelineInput);
+            keyTarget.removeEventListener('keydown', onKeyDown);
         },
     };
 }

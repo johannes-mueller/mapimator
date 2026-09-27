@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { positionAt } from './interpolate';
+import { distanceAt, positionAt } from './interpolate';
 import type { Track } from '../types';
 
 const S = 1000;
@@ -14,7 +14,12 @@ const H = 3_600_000;
 const makeTrack = (
     timesMs: number[],
     coords: [number, number][],
-    extra: { segmentBreaks?: number[]; ele?: number[]; durationMs?: number } = {},
+    extra: {
+        segmentBreaks?: number[];
+        ele?: number[];
+        dist?: number[];
+        durationMs?: number;
+    } = {},
 ): Track => {
     const tRel = new Float64Array(timesMs.length);
     for (let i = 0; i < timesMs.length; i += 1) {
@@ -29,7 +34,9 @@ const makeTrack = (
         lat: Float64Array.from(coords.map(([, lat]) => lat)),
         lon: Float64Array.from(coords.map(([lon]) => lon)),
         ele: Float32Array.from(extra.ele ?? new Array(timesMs.length).fill(0)),
-        dist: new Float32Array(timesMs.length),
+        // Defaults to a flat run, so a test that does not care about distance
+        // is not quietly reading a real interpolation.
+        dist: Float32Array.from(extra.dist ?? new Array(timesMs.length).fill(0)),
         segmentBreaks: new Uint32Array(extra.segmentBreaks ?? []),
         durationMs: extra.durationMs ?? timesMs[timesMs.length - 1] ?? 0,
         distanceM: 0,
@@ -345,5 +352,99 @@ describe('positionAt', () => {
             expect(positionAt(long, 0).index).toBe(0);
             expect(positionAt(long, 999.5 * S).index).toBe(999);
         });
+    });
+});
+
+describe('the interpolation fraction', () => {
+    it('is where the position sits between the two samples', () => {
+        expect(positionAt(straight, 15 * S).fraction).toBe(0.5);
+        expect(positionAt(straight, 12.5 * S).fraction).toBeCloseTo(0.25, 10);
+        expect(positionAt(straight, 17.5 * S).fraction).toBeCloseTo(0.75, 10);
+    });
+
+    it('is zero on a sample boundary', () => {
+        expect(positionAt(straight, 10 * S).fraction).toBe(0);
+    });
+
+    it('is zero whenever the position is held on one sample', () => {
+        // There is no span to be partway across in any of these, which is what
+        // keeps a parked marker from reading as somewhere it is not.
+        expect(positionAt(straight, -H).fraction).toBe(0);
+        expect(positionAt(straight, 60 * S).fraction).toBe(0);
+    });
+
+    it('is zero across a recorded pause', () => {
+        const gapped = makeTrack(
+            [0, 10 * S, 20 * M, 20 * M + 30 * S],
+            [
+                [0, 47],
+                [0.1, 47],
+                [9, 47],
+                [9.1, 47],
+            ],
+            { segmentBreaks: [2] },
+        );
+        expect(positionAt(gapped, 5 * M).status).toBe('parked');
+        expect(positionAt(gapped, 5 * M).fraction).toBe(0);
+    });
+});
+
+describe('distanceAt', () => {
+    /** Ten metres per sample, so the arithmetic is checkable by eye. */
+    const walked = makeTrack(
+        [0, 10 * S, 20 * S, 30 * S],
+        [
+            [0, 47],
+            [0.1, 47],
+            [0.2, 47],
+            [0.3, 47],
+        ],
+        { dist: [0, 10, 25, 60] },
+    );
+
+    it('reads the cumulative distance at a sample', () => {
+        expect(distanceAt(walked, positionAt(walked, 0))).toBe(0);
+        expect(distanceAt(walked, positionAt(walked, 10 * S))).toBe(10);
+    });
+
+    it('interpolates between the two samples', () => {
+        // Halfway between 10 m and 25 m is 17.5 m.
+        expect(distanceAt(walked, positionAt(walked, 15 * S))).toBeCloseTo(17.5, 6);
+    });
+
+    it('is the exact total once the track is done', () => {
+        const position = positionAt(walked, 60 * S);
+        expect(position.status).toBe('done');
+        expect(distanceAt(walked, position)).toBe(60);
+    });
+
+    it('holds at the segment end during a recorded pause', () => {
+        // The pause is not travel, so the distance must not creep across it.
+        const gapped = makeTrack(
+            [0, 10 * S, 20 * M, 20 * M + 30 * S],
+            [
+                [0, 47],
+                [0.1, 47],
+                [9, 47],
+                [9.1, 47],
+            ],
+            { dist: [0, 100, 9000, 9100], segmentBreaks: [2] },
+        );
+        const position = positionAt(gapped, 15 * M);
+        expect(position.status).toBe('parked');
+        expect(distanceAt(gapped, position)).toBe(100);
+    });
+
+    it('agrees with the track total at the end, which is the whole point', () => {
+        // The legend shows the total distance beside the live readout, so the
+        // two have to meet exactly when the run finishes.
+        const total = walked.distanceM || walked.dist[walked.dist.length - 1];
+        const finished = { ...walked, distanceM: total } as Track;
+        expect(distanceAt(finished, positionAt(finished, 30 * S))).toBe(finished.distanceM);
+    });
+
+    it('does not read past the last sample', () => {
+        const short = makeTrack([0], [[0, 47]], { dist: [42] });
+        expect(distanceAt(short, positionAt(short, 0))).toBe(42);
     });
 });

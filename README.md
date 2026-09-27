@@ -4,7 +4,7 @@ A static web app for loading multiple GPX tracks and animating them **simultaneo
 
 Built for comparing repeat runs of the same course: each track's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The finished state is deliberately server-free — files are parsed in the browser and never leave the machine.
 
-> **Status: phases 1–3 of 7 complete.** Loading GPX files, the track legend, and simultaneous marker animation on a shared clock all work today. Speed multipliers, timeline scrubbing, the chart panel, and sharing are planned but **not implemented yet**. See [Roadmap](#roadmap).
+> **Status: phases 1–4 of 7 complete.** Loading GPX files, the track legend, and driving a run with simultaneous markers on a shared clock all work today. The chart panel, legend toggles, follow camera, and single-file sharing are planned but **not implemented yet**. See [Roadmap](#roadmap).
 
 ## Features
 
@@ -18,6 +18,7 @@ Working now:
 - **A track legend** with per-track colour, point count, distance, and duration, each removable.
 - **Static polylines** drawn as a `MultiLineString`, so a recorded pause is left blank rather than joined by a straight line.
 - **Simultaneous animation** on one shared clock — press play and every track advances together, each at its own pace. Tracks recorded hours apart run side by side; a track that has not been reached yet stays hidden; a track that runs out of points freezes and dims. See [Playback](#playback).
+- **Transport you can actually operate with** — scrub the timeline and the map follows the pointer, run at 1× to 300×, and drive it all from the keyboard. Per-track readouts in the legend show where each ride has got, counting from its own start.
 
 ## Requirements
 
@@ -143,10 +144,12 @@ src/
   playback/
     clock.ts                  the shared clock, speed, seek, per-track projection
     clock.test.ts
-    interpolate.ts            sample lookup and gap parking
+    interpolate.ts            sample lookup, gap parking, distance at a position
     interpolate.test.ts
     markerFeatures.ts         TrackState + clock time -> playhead markers
     markerFeatures.test.ts
+    readout.ts                per-track elapsed time and distance covered
+    readout.test.ts
   map/
     basemaps.ts               the five styles + localStorage persistence
     basemaps.test.ts          style table, id validation, storage fallback
@@ -156,8 +159,10 @@ src/
     basemapSwitcher.ts        basemap buttons
     dropzone.ts               drag-and-drop, file picker, parse status
     legend.ts                 track list
-    transport.ts              play button, readout, frame loop, marker/lines
+    transport.ts              play, scrub, speed, keys, readout, frame loop
     transport.test.ts
+    transportKeys.ts          key bindings and the focused-control filter
+    transportKeys.test.ts
   format.test.ts
 e2e/
   run.mjs                     orchestrator: preflight, server, specs, summary
@@ -168,6 +173,7 @@ e2e/
   subpath.spec.mjs            dist/ served from a subpath, as a project site is
   tracks.spec.mjs             parsing, geometry, gaps, errors, large file
   playback.spec.mjs           the shared clock, markers, play/pause, gap parking
+  transport.spec.mjs          scrubbing, speed, keyboard, legend readouts
 ```
 
 `e2e/*.spec.mjs` files are picked up automatically, so adding a spec needs no edit to the runner. A spec may export a `fixtures` list naming the GPX files it loads; only those are written to disk, so a spec that loads no GPX writes nothing. The fixture directory is emptied before each run, so a file left behind by an earlier run can never stand in for one that has stopped being generated.
@@ -195,7 +201,7 @@ One consequence worth knowing before editing: `Track.tRel` is in **seconds** whi
 | 1. Shell, MapLibre setup, basemap switching                                | **Done** |
 | 2. GPX parser, Web Worker, dropzone, legend, static polylines              | **Done** |
 | 3. Shared clock, interpolation, simultaneous marker animation              | **Done** |
-| 4. Timeline scrubbing, speed multiplier, keyboard transport, live readouts | Planned  |
+| 4. Timeline scrubbing, speed multiplier, keyboard transport, live readouts | **Done** |
 | 5. Chart panel (elevation/speed, time/distance axis)                       | Planned  |
 | 6. Legend toggles, follow camera, rendering polish                         | Planned  |
 | 7. Single-file build for easy sharing                                      | Planned  |
@@ -204,11 +210,21 @@ One consequence worth knowing before editing: `Track.tRel` is in **seconds** whi
 
 Pressing play advances **one shared elapsed-time clock**; every track's position is its own timestamp projected onto that clock as `elapsed - (t0 - earliest t0)`. Two rides recorded hours apart therefore run side by side, each at its own pace, and a track that has not been reached yet stays hidden until the clock gets to it. A track that runs out of points freezes on its last position and its line dims, while the others carry on.
 
-A marker inside a **recorded pause** stops at the end of the segment it has just finished and waits there for the length of the gap, then resumes at the first point of the next one. The playhead time keeps advancing throughout, so the readout does not stall either. This is the same segment break that leaves the line undrawn across the gap, and it is why a lunch stop does not send a marker gliding across open country.
+A marker inside a **recorded pause** stops at the end of the segment it has just finished and waits there for the length of the gap, then resumes at the first point of the next one. This is the same segment break that leaves the line undrawn across the gap, and it is why a lunch stop does not send a marker gliding across open country. The shared clock keeps counting throughout the gap, so the track is simply _waiting_ rather than being behind: its legend row still shows the distance it had covered when it stopped, and jumps forward the moment it starts again.
 
-Frames are cheap by design. The frame loop only runs while playing, redraws are driven by the clock's own change notification rather than by the frame callback, and the line geometry is rebuilt only when the set of finished tracks actually changes — `buildLineFeatures` walks every sample of every track, and doing that sixty times a second would make a large file unplayable. Playback never moves the camera.
+### Driving a run
 
-Still to come in phase 4: 1×–300× speed, so a one-hour run finishes in seconds; scrubbing the timeline; and keyboard transport.
+- **Play / pause** with the button, with <kbd>Space</kbd>, or with <kbd>K</kbd>.
+- **Scrub** by dragging the timeline. The map follows the pointer rather than jumping on release, and the camera never moves.
+- **1× to 300×** from the speed control, so a one-hour ride finishes in seconds. The choice survives pausing, scrubbing and loading more tracks — it is a setting, not a one-off.
+- **Step** with <kbd>←</kbd> and <kbd>→</kbd>, five times as far with <kbd>Shift</kbd>, and jump to either end with <kbd>Home</kbd> and <kbd>End</kbd>. The step is a share of the run rather than a fixed number of seconds, so one gesture behaves the same on a four-minute clip and on a thirty-hour ride.
+- **Read** each legend row, which counts from that ride's own start: how long it has been going, and how far it has got.
+
+### Notes for whoever edits this
+
+Arrow steps are a percentage of the total on purpose, and the keyboard handler deliberately declines keys that a focused control already handles. Pressing <kbd>Space</kbd> on the focused play button would otherwise toggle twice — once from the click the browser sends, and once from the key. The same goes for the arrows on a focused timeline, which already seek through their own `input` event. Space is the one key taken back from the timeline, because a range does nothing with it and a drag leaves focus there.
+
+Frames stay cheap. The frame loop only runs while playing, redraws come from the clock's change notification rather than the frame callback, DOM writes are skipped when the text has not changed, and the line geometry is rebuilt only when the set of finished tracks actually changes — `buildLineFeatures` walks every sample of every track, and doing that sixty times a second would make a large file unplayable. Playback never moves the camera.
 
 ## Troubleshooting
 

@@ -138,6 +138,22 @@ ${Array.from(
 ).join('\n')}
   </trkseg></trk>`),
 
+    // Two rides ninety seconds apart, so the shared clock reaches the second one
+    // late and it is legitimately *pending* rather than sitting at zero. Steps by
+    // 0.01 degrees every 30 s along one straight line, which makes the distance at
+    // any point along the track a fixed share of its total.
+    'offset-riders.gpx': () =>
+        gpx(`  <trk><name>Early Rider</name><trkseg>
+${[0, 1, 2, 3, 4, 5, 6]
+    .map((i) => `  ${pt(47.0 + i * 0.01, 8.0 + i * 0.01, 400, iso(T0, i * 30))}`)
+    .join('\n')}
+  </trkseg></trk>
+  <trk><name>Late Rider</name><trkseg>
+${[0, 1, 2, 3, 4, 5, 6]
+    .map((i) => `  ${pt(45.0 + i * 0.01, 6.0 + i * 0.01, 400, iso(T0, 90 + i * 30))}`)
+    .join('\n')}
+  </trkseg></trk>`),
+
     // 60k points, to confirm the worker path stays off the main thread.
     'bulk.gpx': () => {
         const rows = [];

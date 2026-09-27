@@ -1,12 +1,52 @@
 import { formatDistance, formatDuration, formatPointCount } from '../format';
-import type { TrackState } from '../types';
+import type { Track, TrackState } from '../types';
+
+/** How the legend gets the live per-track values, injected so it stays pure DOM. */
+export interface LegendLive {
+    /** The shared clock's elapsed time projected onto this track's own timeline. */
+    getTrackTime: (track: Track) => number;
+    /** The line to show for a track at a given local time. */
+    readout: (track: Track, timeMs: number) => string;
+}
 
 export interface Legend {
     render: (states: TrackState[]) => void;
+    /** Rewrites only the live values; call on every clock change. */
+    updateReadouts: () => void;
 }
 
-export function createLegend(container: HTMLElement, onRemove: (id: string) => void): Legend {
-    const render = (states: TrackState[]): void => {
+export function createLegend(
+    container: HTMLElement,
+    onRemove: (id: string) => void,
+    live?: LegendLive,
+): Legend {
+    let states: TrackState[] = [];
+    const readoutElements = new Map<string, HTMLElement>();
+
+    /**
+     * The rows are written in place rather than rebuilt. A rebuild per frame
+     * would be thrown away sixty times a second and, worse, would move the
+     * remove button out from under a pointer that was heading for it.
+     */
+    const updateReadouts = (): void => {
+        if (!live) {
+            return;
+        }
+        for (const { track } of states) {
+            const element = readoutElements.get(track.id);
+            if (!element) {
+                continue;
+            }
+            const text = live.readout(track, live.getTrackTime(track));
+            if (element.textContent !== text) {
+                element.textContent = text;
+            }
+        }
+    };
+
+    const render = (next: TrackState[]): void => {
+        states = next;
+        readoutElements.clear();
         container.replaceChildren();
 
         if (states.length === 0) {
@@ -49,6 +89,13 @@ export function createLegend(container: HTMLElement, onRemove: (id: string) => v
 
             text.append(name, meta);
 
+            if (live) {
+                const readout = document.createElement('span');
+                readout.className = 'legend-readout';
+                text.append(readout);
+                readoutElements.set(track.id, readout);
+            }
+
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'legend-remove';
@@ -63,7 +110,10 @@ export function createLegend(container: HTMLElement, onRemove: (id: string) => v
         }
 
         container.append(list);
+        // Written through the same path the clock uses, so the first frame is
+        // never drawn with an empty readout that later corrects itself.
+        updateReadouts();
     };
 
-    return { render };
+    return { render, updateReadouts };
 }
