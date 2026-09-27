@@ -20,21 +20,19 @@
 
         <aside id="sidebar" aria-label="Tracks">
             <section id="dropzone-region">
-                <div id="dropzone" aria-disabled="true">
-                    <p class="dz-title">GPX upload</p>
-                    <p class="dz-hint">Drop support arrives in phase 2</p>
-                    <input
-                        id="file-input"
-                        type="file"
-                        accept=".gpx,application/gpx+xml"
-                        multiple
-                        hidden
-                    />
-                </div>
+                <button id="dropzone" type="button">
+                    <span class="dz-title">Drop GPX files</span>
+                    <span class="dz-hint">or click to browse</span>
+                </button>
+                <input
+                    id="file-input"
+                    type="file"
+                    accept=".gpx,application/gpx+xml"
+                    multiple
+                    hidden
+                />
             </section>
-            <section id="legend-region" aria-label="Track list">
-                <p class="placeholder">Track list arrives in phase 2</p>
-            </section>
+            <section id="legend-region" aria-label="Track list"></section>
         </aside>
 
         <section id="chart-region" aria-label="Chart">

@@ -4,89 +4,24 @@ import {
     NavigationControl,
     setWorkerUrl,
 } from 'maplibre-gl';
-import type { GeoJSONSource } from 'maplibre-gl';
-import type { FeatureCollection, LineString, Point } from 'geojson';
 import { resolveBasemap, writeStoredBasemapId } from './basemaps';
+import { attachTrackLayers, TRACK_MARKER_LAYER } from './trackLayers';
 
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
 setWorkerUrl(workerUrl);
-
-export const TRACK_LINES_SOURCE = 'track-lines';
-export const TRACK_MARKERS_SOURCE = 'track-markers';
-export const TRACK_LINE_FULL_LAYER = 'track-line-full';
-export const TRACK_LINE_DONE_LAYER = 'track-line-done';
-export const TRACK_MARKER_LAYER = 'track-marker';
-
-const EMPTY_LINES: FeatureCollection<LineString> = {
-    type: 'FeatureCollection',
-    features: [],
-};
-
-const EMPTY_MARKERS: FeatureCollection<Point> = {
-    type: 'FeatureCollection',
-    features: [],
-};
 
 export interface MapViewHandle {
     map: MaplibreMap;
     setBasemap: (id: string) => void;
     getBasemapId: () => string;
     areTrackLayersAttached: () => boolean;
-}
-
-function attachTrackLayers(map: MaplibreMap): void {
-    if (map.getSource(TRACK_LINES_SOURCE)) {
-        return;
-    }
-
-    map.addSource(TRACK_LINES_SOURCE, {
-        type: 'geojson',
-        data: EMPTY_LINES,
-        lineMetrics: true,
-    });
-
-    map.addSource(TRACK_MARKERS_SOURCE, {
-        type: 'geojson',
-        data: EMPTY_MARKERS,
-    });
-
-    map.addLayer({
-        id: TRACK_LINE_FULL_LAYER,
-        type: 'line',
-        source: TRACK_LINES_SOURCE,
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: {
-            'line-color': ['get', 'color'],
-            'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.5, 14, 3, 18, 5],
-            'line-opacity': ['case', ['get', 'done'], 0.18, 0.4],
-        },
-    });
-
-    map.addLayer({
-        id: TRACK_LINE_DONE_LAYER,
-        type: 'line',
-        source: TRACK_LINES_SOURCE,
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: {
-            'line-color': ['get', 'color'],
-            'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 14, 4, 18, 6.5],
-            'line-opacity': ['case', ['get', 'done'], 0.5, 0.95],
-        },
-    });
-
-    map.addLayer({
-        id: TRACK_MARKER_LAYER,
-        type: 'circle',
-        source: TRACK_MARKERS_SOURCE,
-        paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 3.5, 14, 6, 18, 9],
-            'circle-color': ['get', 'color'],
-            'circle-stroke-width': 1.5,
-            'circle-stroke-color': 'rgba(8, 10, 14, 0.85)',
-            'circle-opacity': ['case', ['get', 'done'], 0.55, 1],
-        },
-    });
+    /**
+     * Runs `callback` after the overlay layers exist, both now (if the style is
+     * already up) and after every later `style.load`. Basemap switching wipes
+     * the overlay sources, so anything that drew tracks has to redraw here.
+     */
+    onStyleReady: (callback: () => void) => void;
 }
 
 export function createMapView(container: HTMLElement, initialBasemapId: string): MapViewHandle {
@@ -106,9 +41,15 @@ export function createMapView(container: HTMLElement, initialBasemapId: string):
     map.addControl(new AttributionControl({ compact: true }), 'bottom-left');
 
     let currentBasemapId = basemap.id;
+    let styleReady = false;
+    const styleReadyHandlers = new Set<() => void>();
 
     map.on('style.load', () => {
         attachTrackLayers(map);
+        styleReady = true;
+        for (const handler of [...styleReadyHandlers]) {
+            handler();
+        }
     });
 
     const setBasemap = (id: string): void => {
@@ -118,7 +59,16 @@ export function createMapView(container: HTMLElement, initialBasemapId: string):
         }
         currentBasemapId = next.id;
         writeStoredBasemapId(next.id);
+        styleReady = false;
         map.setStyle(next.styleUrl, { diff: false });
+    };
+
+    const onStyleReady = (callback: () => void): void => {
+        if (styleReady) {
+            callback();
+            return;
+        }
+        styleReadyHandlers.add(callback);
     };
 
     return {
@@ -126,13 +76,6 @@ export function createMapView(container: HTMLElement, initialBasemapId: string):
         setBasemap,
         getBasemapId: () => currentBasemapId,
         areTrackLayersAttached: () => map.getLayer(TRACK_MARKER_LAYER) !== undefined,
+        onStyleReady,
     };
-}
-
-export function getLinesSource(map: MaplibreMap): GeoJSONSource | undefined {
-    return map.getSource(TRACK_LINES_SOURCE) as GeoJSONSource | undefined;
-}
-
-export function getMarkersSource(map: MaplibreMap): GeoJSONSource | undefined {
-    return map.getSource(TRACK_MARKERS_SOURCE) as GeoJSONSource | undefined;
 }
