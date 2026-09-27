@@ -4,7 +4,7 @@ A static web app for loading multiple GPX runs and animating them **simultaneous
 
 Built for comparing repeat runs of the same course: each run's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The app has no backend: your GPX files are parsed in the browser and never uploaded anywhere. The one thing that does leave the machine is a set of small requests to the elevation tile host, to read the ground's height along each route — see [Elevation comes from a model](#elevation-comes-from-a-model).
 
-> **Status: phases 1–5 of 7 complete, and the first half of phase 6.** Loading GPX files, the run legend, driving a run with simultaneous markers on a shared clock, and the elevation/speed chart all work today, and a run can now be switched off in the legend. The follow camera and single-file sharing are planned but **not implemented yet**. A terrain model supplies the elevation, so two runs of one course can be compared even when their recorded altitudes disagree. See [Roadmap](#roadmap).
+> **Status: phases 1–5 of 7 complete, and most of phase 6.** Loading GPX files, the run legend, driving a run with simultaneous markers on a shared clock, and the elevation/speed chart all work today. A run can be switched off in the legend, and the camera now follows a played run without being asked. Rendering polish and single-file sharing are planned but **not implemented yet**. A terrain model supplies the elevation, so two runs of one course can be compared even when their recorded altitudes disagree. See [Roadmap](#roadmap).
 
 ## Features
 
@@ -21,6 +21,7 @@ Working now:
 - **Transport you can actually operate with** — scrub the timeline and the map follows the pointer, run at 1× to 300×, and drive it all from the keyboard. Per-run readouts in the legend show where each run has got, counting from its own start.
 - **An elevation and speed chart** for every loaded run, drawn against distance in each run's own colour, with a marker per run following the playhead and a click anywhere on the chart to seek to it. See [The chart](#the-chart).
 - **Elevation from a terrain model, not from your watch** — the profile is the height of the ground, so two runs of one course can be compared against each other even when their recorded altitudes do not agree. See [Elevation comes from a model](#elevation-comes-from-a-model).
+- **A camera that follows a played run**, panning just enough to keep it in view and never zooming. Touch the map yourself and it steps back until you press play again. See [Follow camera](#follow-camera).
 
 ## Requirements
 
@@ -67,7 +68,7 @@ There are two layers, and they answer different questions.
 
 **Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, the E2E harness itself, the chart's profile building, decimation, distance inversion, and one-unit axis labels, and formatting. They run in a Node environment with no DOM and need no network, so they are fast — the whole suite takes under a second.
 
-**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that playback does not hijack the camera, that a recorded pause parks the marker instead of gliding it across the gap, that a clicked chart really seeks the run, and that `dist/` really works from a subpath. It also charts a 60,000-point file, so a profile too long to draw point for point is exercised in a real browser. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
+**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that the follow camera brings a run back into view and a real drag on the map actually suspends it, that a recorded pause parks the marker instead of gliding it across the gap, that a clicked chart really seeks the run, and that `dist/` really works from a subpath. It also charts a 60,000-point file, so a profile too long to draw point for point is exercised in a real browser. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
 
 The E2E suite needs **live network access to `tiles.openfreemap.org`** — it renders the real styles and the real tiles, because a recorded snapshot would test the recording rather than the app. It preflights that endpoint before launching a browser, so a connectivity problem reports itself as an environment problem instead of a 30-second timeout:
 
@@ -162,6 +163,8 @@ src/
     basemaps.test.ts          style table, id validation, storage fallback
     mapView.ts                MapLibre setup and style switching
     trackLayers.ts            overlay sources, layers, rendering, fitBounds
+    followCamera.ts           the follow-camera pan: margin, worst-marker rule
+    followCamera.test.ts
   chart/
     profile.ts                the metric against distance, decimation, inverses
     profile.test.ts
@@ -186,6 +189,9 @@ e2e/
   playback.spec.mjs           the shared clock, markers, play/pause, gap parking
   chart.spec.mjs              the chart panel: axes, profiles, markers, click-to-seek
   transport.spec.mjs          scrubbing, speed, keyboard, legend readouts
+  legend.spec.mjs             hiding a run: map, chart, readouts, focus, wording
+  terrain.spec.mjs            DEM sampling, fallback, a blocked tile host
+  followcamera.spec.mjs       real projection, a real drag, suspend and resume
 ```
 
 `e2e/*.spec.mjs` files are picked up automatically, so adding a spec needs no edit to the runner. A spec may export a `fixtures` list naming the GPX files it loads; only those are written to disk, so a spec that loads no GPX writes nothing. The fixture directory is emptied before each run, so a file left behind by an earlier run can never stand in for one that has stopped being generated.
@@ -208,15 +214,15 @@ One consequence worth knowing before editing: `Track.tRel` is in **seconds** whi
 
 ## Roadmap
 
-| Phase                                                                      | Status                       |
-| -------------------------------------------------------------------------- | ---------------------------- |
-| 1. Shell, MapLibre setup, basemap switching                                | **Done**                     |
-| 2. GPX parser, Web Worker, dropzone, legend, static polylines              | **Done**                     |
-| 3. Shared clock, interpolation, simultaneous marker animation              | **Done**                     |
-| 4. Timeline scrubbing, speed multiplier, keyboard transport, live readouts | **Done**                     |
-| 5. Chart panel (elevation/speed, time/distance axis)                       | **Done**                     |
-| 6. Legend toggles, follow camera, rendering polish                         | Partly done — legend toggles |
-| 7. Single-file build for easy sharing                                      | Planned                      |
+| Phase                                                                      | Status                              |
+| -------------------------------------------------------------------------- | ----------------------------------- |
+| 1. Shell, MapLibre setup, basemap switching                                | **Done**                            |
+| 2. GPX parser, Web Worker, dropzone, legend, static polylines              | **Done**                            |
+| 3. Shared clock, interpolation, simultaneous marker animation              | **Done**                            |
+| 4. Timeline scrubbing, speed multiplier, keyboard transport, live readouts | **Done**                            |
+| 5. Chart panel (elevation/speed, time/distance axis)                       | **Done**                            |
+| 6. Legend toggles, follow camera, rendering polish                         | Mostly done — rendering polish left |
+| 7. Single-file build for easy sharing                                      | Planned                             |
 
 ## Playback
 
@@ -227,7 +233,7 @@ A marker inside a **recorded pause** stops at the end of the segment it has just
 ### Driving a run
 
 - **Play / pause** with the button, with <kbd>Space</kbd>, or with <kbd>K</kbd>.
-- **Scrub** by dragging the timeline. The map follows the pointer rather than jumping on release, and the camera never moves.
+- **Scrub** by dragging the timeline. The map follows the pointer rather than jumping on release; the drag itself never moves the camera, though the follow camera can still nudge it back into view if you scrub while playing. See [Follow camera](#follow-camera).
 - **1× to 300×** from the speed control, so a one-hour run finishes in seconds. The choice survives pausing, scrubbing and loading more runs — it is a setting, not a one-off.
 - **Step** with <kbd>←</kbd> and <kbd>→</kbd>, five times as far with <kbd>Shift</kbd>, and jump to either end with <kbd>Home</kbd> and <kbd>End</kbd>. The step is a share of the run rather than a fixed number of seconds, so one gesture behaves the same on a four-minute clip and on a thirty-hour run.
 - **Read** each legend row, which counts from that run's own start: how long it has been going, and how far it has got.
@@ -236,7 +242,15 @@ A marker inside a **recorded pause** stops at the end of the segment it has just
 
 Arrow steps are a percentage of the total on purpose, and the keyboard handler deliberately declines keys that a focused control already handles. Pressing <kbd>Space</kbd> on the focused play button would otherwise toggle twice — once from the click the browser sends, and once from the key. The same goes for the arrows on a focused timeline, which already seek through their own `input` event. Space is the one key taken back from the timeline, because a range does nothing with it and a drag leaves focus there.
 
-Frames stay cheap. The frame loop only runs while playing, redraws come from the clock's change notification rather than the frame callback, DOM writes are skipped when the text has not changed, and the line geometry is rebuilt only when the set of finished runs actually changes — `buildLineFeatures` walks every sample of every run, and doing that sixty times a second would make a large file unplayable. Playback never moves the camera.
+Frames stay cheap. The frame loop only runs while playing, redraws come from the clock's change notification rather than the frame callback, DOM writes are skipped when the text has not changed, and the line geometry is rebuilt only when the set of finished runs actually changes — `buildLineFeatures` walks every sample of every run, and doing that sixty times a second would make a large file unplayable.
+
+## Follow camera
+
+While playing, the camera keeps every **visible** marker inside a margin — the middle 70% of the map — panning just enough to bring one back once it drifts past it. It never zooms: a marker at the edge is pulled back to the edge of the margin, not to the centre, so the camera does the least it can to keep a run in view.
+
+Each marker is checked on its own, not as a group, so this works the same with one run or several: whichever one is furthest past the margin decides the correction, and pulling it back only ever helps the others. Two markers past _opposite_ edges of the same axis by equal amounts cannot both be satisfied by one pan, so the corrections cancel and the camera holds still rather than oscillating between them — an accepted limit of following by panning alone, not a bug. A hidden run (see [Hiding a run](#hiding-a-run)) is never part of the calculation, because it has no marker to keep in view.
+
+**Touch the map yourself and following steps back.** A real drag, scroll, or pinch suspends it until you press play again — even if it was already playing, pressing play is the one gesture that re-arms it. The correction's own camera movement does not trip this itself: MapLibre tells a genuine user gesture apart from a programmatic one by whether the event it fires carries the original mouse/touch/wheel event, and only a real one counts.
 
 ## The chart
 

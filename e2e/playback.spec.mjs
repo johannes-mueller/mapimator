@@ -276,10 +276,13 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
         stillFrozen?.lon === frozen?.lon,
         `${frozen?.lon} -> ${stillFrozen?.lon}`,
     );
+    // The follow camera (phase 6) deliberately does move the camera while
+    // playing, so "never hijacked" no longer holds — but once paused, it still
+    // has to hold as still as the marker does, which is what this now checks.
     suite.check(
-        'the camera was never hijacked by playback',
-        stillPaused.center[0] === playing.center[0] && stillPaused.center[1] === playing.center[1],
-        JSON.stringify([playing.center, stillPaused.center]),
+        'the camera does not drift once paused',
+        stillPaused.center[0] === paused.center[0] && stillPaused.center[1] === paused.center[1],
+        JSON.stringify([paused.center, stillPaused.center]),
     );
 
     suite.section('MARKERS ARE PAINTED, NOT JUST STORED');

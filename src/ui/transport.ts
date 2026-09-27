@@ -2,6 +2,7 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { TrackState } from '../types';
 import { renderMarkers, renderTracks } from '../map/trackLayers';
 import { buildMarkerFeatures } from '../playback/markerFeatures';
+import { computeFollowPan } from '../map/followCamera';
 import { createPlaybackClock } from '../playback/clock';
 import type { PlaybackClock } from '../playback/clock';
 import { formatDuration } from '../format';
@@ -34,6 +35,9 @@ export interface TransportHandle {
     getElapsedMs: () => number;
     getTotalMs: () => number;
     getSpeed: () => number;
+    /** True once a real drag/scroll/pinch has suspended the follow camera,
+     *  until play() is called again. Exposed for the E2E suite. */
+    isFollowSuspended: () => boolean;
     /** Called whenever the transport redraws, for readouts it does not own. */
     subscribe: (listener: () => void) => () => void;
     /** Re-reads the track set and redraws; call when the store changes. */
@@ -65,7 +69,9 @@ export function timelineStep(totalMs: number): number {
 
 /**
  * Wires the play button, the time readout and the animation frame loop to the
- * shared playback clock.
+ * shared playback clock, and follows the visible markers with the camera
+ * while playing — panning just enough to keep them in view, suspended by a
+ * real drag/scroll/pinch until play is pressed again.
  *
  * Redraws come from the clock's subscription rather than straight from the frame
  * callback, so a frame that does not move the playhead costs nothing. The line
@@ -91,7 +97,44 @@ export function createTransport(options: TransportOptions): TransportHandle {
     let lastDoneKey: string | null = null;
     let lastClockText: string | null = null;
     let lastValueText: string | null = null;
+    let followSuspended = false;
     const listeners = new Set<() => void>();
+
+    /**
+     * Pans just enough to keep every visible marker inside the margin, unless
+     * a real drag/scroll/pinch has suspended following. The correction is a
+     * `jumpTo` with no `originalEvent`, so the `movestart` it fires is not
+     * mistaken for the user interaction that suspends following.
+     */
+    const applyFollow = (markers: ReturnType<typeof buildMarkerFeatures>): void => {
+        if (!clock.isPlaying() || followSuspended) {
+            return;
+        }
+        const container = map.getContainer();
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        const points = markers.features.map((feature) => {
+            const [lon, lat] = feature.geometry.coordinates;
+            const p = map.project([lon, lat]);
+            return { x: p.x, y: p.y };
+        });
+        const pan = computeFollowPan(points, width, height);
+        if (!pan) {
+            return;
+        }
+        const centerPx = map.project(map.getCenter());
+        const newCenter = map.unproject([centerPx.x + pan.dx, centerPx.y + pan.dy]);
+        map.jumpTo({ center: newCenter });
+    };
+
+    /** A real drag/scroll/pinch carries the DOM event that caused it; our own
+     *  corrective jumps do not, so they cannot suspend themselves. */
+    const onMoveStart = (event: { originalEvent?: unknown }): void => {
+        if (event.originalEvent != null && clock.isPlaying()) {
+            followSuspended = true;
+        }
+    };
+    map.on('movestart', onMoveStart);
 
     /** Which tracks are finished, as a cheap comparable key. */
     const doneKey = (tracks: TrackState[]): string =>
@@ -156,6 +199,7 @@ export function createTransport(options: TransportOptions): TransportHandle {
         const tracks = getTracks();
         const markers = buildMarkerFeatures(tracks, clock.getElapsedMs());
         renderMarkers(map, markers);
+        applyFollow(markers);
         const key = doneKey(tracks);
         if (withLines || key !== lastDoneKey) {
             lastDoneKey = key;
@@ -211,6 +255,9 @@ export function createTransport(options: TransportOptions): TransportHandle {
             clock.seek(0);
         }
         clock.play();
+        // Pressing play always re-arms following, suspended or not: that is the
+        // one gesture agreed to bring it back.
+        followSuspended = false;
         updateButton();
         syncLoop();
     };
@@ -294,6 +341,7 @@ export function createTransport(options: TransportOptions): TransportHandle {
         getElapsedMs: () => clock.getElapsedMs(),
         getTotalMs: () => clock.getTotalMs(),
         getSpeed: () => clock.getSpeed(),
+        isFollowSuspended: () => followSuspended,
         subscribe: (listener: () => void) => {
             listeners.add(listener);
             return () => {
@@ -317,6 +365,7 @@ export function createTransport(options: TransportOptions): TransportHandle {
             speedSelect.removeEventListener('change', onSpeedChange);
             timeline.removeEventListener('input', onTimelineInput);
             keyTarget.removeEventListener('keydown', onKeyDown);
+            map.off('movestart', onMoveStart);
         },
     };
 }

@@ -51,6 +51,19 @@ const minuteTrack = (id = 'a', t0 = 0): Track =>
         ],
     );
 
+/** A hundred-second straight line from lon 0 to lon 10, lat fixed, so a marker's
+ *  screen x is a simple, round function of elapsed time under `fakeMap`. */
+const followTrack = (id = 'f'): Track =>
+    makeTrack(
+        id,
+        0,
+        [0, 100 * S],
+        [
+            [0, 47],
+            [10, 47],
+        ],
+    );
+
 const state = (track: Track, visible = true): TrackState => ({ track, visible });
 
 /** Just enough of a button for the controller to drive. */
@@ -234,6 +247,56 @@ interface RenderedFeature {
     geometry: { coordinates: number[] };
 }
 
+/**
+ * A one-dimensional camera model, just enough to exercise the follow-camera
+ * wiring: longitude maps to screen x by a fixed scale, and jumpTo/getCenter
+ * agree with project/unproject exactly, the way the real map's do. Latitude
+ * and y are untouched, which is enough — the geometry of combining axes is
+ * `followCamera.test.ts`'s job, not this file's.
+ */
+const fakeMap = (width = 1000, height = 800, scale = 100) => {
+    let centerLon = 0;
+    const listeners = new Map<string, ((event: { originalEvent?: unknown }) => void)[]>();
+    const toX = (lon: number): number => width / 2 + (lon - centerLon) * scale;
+    const fromX = (x: number): number => centerLon + (x - width / 2) / scale;
+    return {
+        getContainer: () => ({ clientWidth: width, clientHeight: height }),
+        getCenter: () => ({ lng: centerLon, lat: 0 }),
+        project: (lngLat: [number, number] | { lng: number }) => {
+            const lon = Array.isArray(lngLat) ? lngLat[0] : lngLat.lng;
+            return { x: toX(lon), y: height / 2 };
+        },
+        unproject: (point: [number, number] | { x: number }) => {
+            const x = Array.isArray(point) ? point[0] : point.x;
+            return { lng: fromX(x), lat: 0 };
+        },
+        jumpTo: ({ center }: { center: { lng: number } }) => {
+            centerLon = center.lng;
+            // The real map fires movestart for a programmatic jump too, but with
+            // no originalEvent — the one thing that tells the two apart.
+            for (const listener of listeners.get('movestart') ?? []) {
+                listener({ originalEvent: undefined });
+            }
+        },
+        on: (type: string, listener: (event: { originalEvent?: unknown }) => void) => {
+            listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+        },
+        off: (type: string, listener: (event: { originalEvent?: unknown }) => void) => {
+            listeners.set(
+                type,
+                (listeners.get(type) ?? []).filter((l) => l !== listener),
+            );
+        },
+        /** Fires a movestart as a real drag/scroll/pinch would: with a DOM event. */
+        userMove: () => {
+            for (const listener of listeners.get('movestart') ?? []) {
+                listener({ originalEvent: {} });
+            }
+        },
+        getCenterLon: () => centerLon,
+    };
+};
+
 const harness = (initial: TrackState[] = []) => {
     const button = fakeButton();
     const clockElement = { textContent: '' };
@@ -241,7 +304,9 @@ const harness = (initial: TrackState[] = []) => {
     const timeline = fakeRange();
     const keys = fakeKeyTarget();
     const data = new Map<string, unknown[]>();
+    const camera = fakeMap();
     const map = {
+        ...camera,
         getSource: (id: string) => {
             const set = (value: unknown): void => {
                 data.set(id, [...(data.get(id) ?? []), value]);
@@ -278,6 +343,7 @@ const harness = (initial: TrackState[] = []) => {
         timeline,
         keys,
         frames,
+        camera,
         setTracks: (next: TrackState[]) => {
             tracks = next;
             transport.refresh();
@@ -884,5 +950,71 @@ describe('tracks recorded at different times', () => {
         expect(h.transport.getElapsedMs()).toBe(30 * S);
         expect(h.timeline.value).toBe('30000');
         expect(h.markers().map((f) => f.geometry.coordinates[0])).toEqual([3, 3]);
+    });
+});
+
+describe('the follow camera', () => {
+    it('pans to bring a marker back once it drifts past the margin', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.play();
+        h.frames.run(0);
+        h.frames.run(40 * S); // lon 4, x 900 under the fake's scale — 50px past the margin
+        expect(h.camera.getCenterLon()).toBeCloseTo(0.5, 12);
+    });
+
+    it('leaves the camera alone while the marker is inside the margin', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.play();
+        h.frames.run(0);
+        h.frames.run(5 * S); // lon 0.5, x 550 — well inside [150, 850]
+        expect(h.camera.getCenterLon()).toBe(0);
+    });
+
+    it('never corrects while paused, however far outside the margin the marker sits', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.seek(90 * S); // lon 9, x 1400 — far past the margin
+        expect(h.camera.getCenterLon()).toBe(0);
+    });
+
+    it('is suspended by a real drag while playing, and stops correcting', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.play();
+        h.frames.run(0);
+        h.camera.userMove();
+        expect(h.transport.isFollowSuspended()).toBe(true);
+        h.frames.run(40 * S);
+        expect(h.camera.getCenterLon()).toBe(0);
+    });
+
+    it('does not suspend itself: its own correction fires movestart with no originalEvent', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.play();
+        h.frames.run(0);
+        h.frames.run(40 * S); // corrects, and its jumpTo fires movestart on the fake too
+        expect(h.transport.isFollowSuspended()).toBe(false);
+    });
+
+    it('is re-armed by play(), even without an intervening pause', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.play();
+        h.frames.run(0);
+        h.camera.userMove();
+        h.frames.run(40 * S);
+        expect(h.camera.getCenterLon()).toBe(0); // still suspended, so no correction yet
+
+        h.transport.play();
+        expect(h.transport.isFollowSuspended()).toBe(false);
+        h.frames.run(41 * S); // init tick after the re-armed play()
+        h.frames.run(80 * S); // lon 8, x 1300 — well past the margin
+        expect(h.camera.getCenterLon()).toBeGreaterThan(0);
+    });
+
+    it('a real drag after dispose no longer reaches the transport', () => {
+        const h = harness([state(followTrack())]);
+        h.transport.play();
+        h.frames.run(0);
+        h.transport.dispose();
+        h.camera.userMove();
+        expect(h.transport.isFollowSuspended()).toBe(false);
     });
 });

@@ -98,10 +98,9 @@ export function renderTracks(
  * Moves the playhead markers. Called on every animation frame while playing and
  * once whenever the track set changes.
  *
- * Takes the features already built rather than the tracks and elapsed time, so
- * a caller that also needs the positions — anything reading where a marker
- * actually is on screen — computes them once and shares the result, rather
- * than risking a second computation that drifts from what got drawn.
+ * Takes the features already built rather than the tracks and elapsed time,
+ * because the follow camera needs the exact same positions to decide whether
+ * to pan — computing them twice per frame would let the two drift apart.
  */
 export function renderMarkers(
     map: MaplibreMap,
