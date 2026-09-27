@@ -1,7 +1,7 @@
 {
   "name": "mapimator",
   "version": "0.1.0",
-  "description": "Animate multiple GPX tracks simultaneously on a switchable OpenStreetMap basemap",
+  "description": "Animate multiple GPX runs simultaneously on a switchable OpenStreetMap basemap",
   "license": "MIT",
   "author": "Johannes Mueller <github@johannes-mueller.org>",
   "type": "module",
