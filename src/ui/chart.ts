@@ -306,6 +306,12 @@ export function createChart(
         states = next;
         profiles.replaceChildren();
         dots.replaceChildren();
+        // The guides have to be emptied here too, or every render leaves the
+        // previous set behind: a ride keeps a guide that has stopped moving, and
+        // one ride accumulates one stale guide per re-render. It stays invisible
+        // while a chart is drawn once, and obvious as soon as anything updates it
+        // later — which is what happens when elevations arrive from a model.
+        guides.replaceChildren();
         drawn = [];
 
         const visible = states.filter(({ visible: shown }) => shown);

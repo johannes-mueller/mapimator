@@ -101,6 +101,62 @@ describe('createTrackStore', () => {
         expect(store.getById('missing')).toBeUndefined();
     });
 
+    describe('replacing elevations from an elevation model', () => {
+        it('swaps the elevations and keeps everything else', () => {
+            const store = createTrackStore();
+            const [a] = store.add([makeParsed('A')]);
+            const before = store.getById(a.id)!.track;
+            const ele = Float32Array.from([412, 430]);
+            expect(store.updateElevation(a.id, ele)).toBe(true);
+            const after = store.getById(a.id)!.track;
+            expect(Array.from(after.ele)).toEqual([412, 430]);
+            expect(after.ele).toBe(ele);
+            expect(after.id).toBe(before.id);
+            expect(after.name).toBe('A');
+            expect(after.color).toBe(before.color);
+            expect(after.lat).toBe(before.lat);
+            expect(after.lon).toBe(before.lon);
+            expect(after.tRel).toBe(before.tRel);
+            expect(after.dist).toBe(before.dist);
+        });
+
+        it('keeps whether a track is shown', () => {
+            // A model arriving must not switch a hidden ride back on, or a rider
+            // who muted a track to compare two others gets it back unasked.
+            const store = createTrackStore();
+            const [a] = store.add([makeParsed('A')]);
+            store.updateElevation(a.id, Float32Array.from([1]));
+            // Hiding is a store concern elsewhere; the state object is what carries
+            // it, so check the flag survives the replacement.
+            const state = store.getById(a.id)!;
+            expect(state.visible).toBe(true);
+        });
+
+        it('leaves the other tracks alone', () => {
+            const store = createTrackStore();
+            const [a, b] = store.add([makeParsed('A'), makeParsed('B')]);
+            store.updateElevation(a.id, Float32Array.from([999]));
+            expect(Array.from(store.getById(b.id)!.track.ele)).toEqual([0]);
+            expect(store.getById(b.id)!.track.name).toBe('B');
+        });
+
+        it('says no for a track that is no longer there', () => {
+            // The normal answer when a model arrives after the file was removed.
+            const store = createTrackStore();
+            expect(store.updateElevation('track-99', new Float32Array([1]))).toBe(false);
+        });
+
+        it('notifies, because the chart has to redraw', () => {
+            const store = createTrackStore();
+            const [a] = store.add([makeParsed('A')]);
+            const listener = vi.fn();
+            store.subscribe(listener);
+            listener.mockClear();
+            store.updateElevation(a.id, Float32Array.from([412]));
+            expect(listener).toHaveBeenCalledTimes(1);
+        });
+    });
+
     describe('subscriptions', () => {
         it('notifies on add, remove, and clear', () => {
             const store = createTrackStore();

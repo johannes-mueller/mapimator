@@ -14,6 +14,25 @@ const iso = (base, seconds) => new Date(base + seconds * 1000).toISOString().rep
 const T0 = Date.parse('2024-03-01T08:00:00Z');
 
 /**
+ * One run of a fixed 21-point route through the Lauterbrunnen valley, with the
+ * altitude its watch recorded rather than the altitude of the ground.
+ *
+ * `base` is what the watch thinks the valley floor is. The wiggle on top is the
+ * noise every consumer-grade watch puts on a steady climb, so a recorded profile
+ * has both a bias and a jitter to be wrong by.
+ */
+const terrainRun = (name, base) => {
+    const LAT0 = 46.59;
+    const LON0 = 7.9;
+    const STEP = 0.00075;
+    const rows = Array.from({ length: 21 }, (_, i) => {
+        const ele = base + 25 * Math.sin(i / 3);
+        return `      ${pt(LAT0 + STEP * i, LON0 + STEP * i, Math.round(ele), iso(T0, i * 10))}`;
+    });
+    return gpx(`  <trk><name>${name}</name><trkseg>\n${rows.join('\n')}\n    </trkseg></trk>`);
+};
+
+/**
  * Each GPX fixture targets one case the parser has to get right. The unit
  * tests in `src/gpx/parseGpx.test.ts` cover the same ground far more
  * precisely; these exist to prove the values survive the whole trip through
@@ -247,6 +266,13 @@ ${climber}
 ${cruiser}
   </trkseg></trk>`);
     },
+
+    // The same ground twice, recorded by two watches that disagree: one noisy
+    // around the true altitude, one with a datum 200 m out. The route is
+    // Lauterbrunnen, which climbs about 600 m over its length, so a model
+    // elevation is nothing like either recording and a wrong one cannot hide.
+    'terrain-run-a.gpx': () => terrainRun('Run A', 900),
+    'terrain-run-b.gpx': () => terrainRun('Run B', 1100),
 
     // 60k points, to confirm the worker path stays off the main thread.
     'bulk.gpx': () => {

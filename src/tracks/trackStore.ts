@@ -1,12 +1,20 @@
 import type { Bounds, Track, TrackState } from '../types';
 import type { ParsedTrack } from '../gpx/parseGpx';
 import { trackColorFor } from './palette';
+import { withElevation } from '../terrain/elevation';
 
 export interface TrackStore {
     getAll: () => TrackState[];
     getById: (id: string) => TrackState | undefined;
     /** Appends parsed tracks, assigning ids and colours. Returns what was added. */
     add: (parsed: ParsedTrack[]) => Track[];
+    /**
+     * Replaces a track's elevations with ones sampled from an elevation model,
+     * keeping the id, the colour and whether it is shown. Returns false for a
+     * track that is no longer there, which is the normal answer when a model
+     * arrives after the rider has removed the file.
+     */
+    updateElevation: (id: string, ele: Float32Array) => boolean;
     remove: (id: string) => void;
     clear: () => void;
     getCombinedBounds: () => Bounds | null;
@@ -42,6 +50,24 @@ export function createTrackStore(): TrackStore {
         states = [...states, ...added.map((track) => ({ track, visible: true }))];
         notify();
         return added;
+    };
+
+    const updateElevation = (id: string, ele: Float32Array): boolean => {
+        const state = states.find((candidate) => candidate.track.id === id);
+        if (!state) {
+            return false;
+        }
+        // Replaced on the state rather than the track, so the object the chart is
+        // holding keeps the elevations it drew with while the store moves on. The
+        // next redraw reads the new ones, and nothing in between sees a track
+        // whose elevation disagrees with the store's.
+        states = states.map((candidate) =>
+            candidate === state
+                ? { ...candidate, track: withElevation(candidate.track, ele) }
+                : candidate,
+        );
+        notify();
+        return true;
     };
 
     const remove = (id: string): void => {
@@ -84,6 +110,7 @@ export function createTrackStore(): TrackStore {
         getAll: () => states,
         getById: (id) => states.find((state) => state.track.id === id),
         add,
+        updateElevation,
         remove,
         clear,
         getCombinedBounds,

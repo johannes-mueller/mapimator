@@ -2,9 +2,9 @@
 
 A static web app for loading multiple GPX tracks and animating them **simultaneously on a shared clock** over a switchable OpenStreetMap basemap.
 
-Built for comparing repeat runs of the same course: each track's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The finished state is deliberately server-free — files are parsed in the browser and never leave the machine.
+Built for comparing repeat runs of the same course: each track's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The app has no backend: your GPX files are parsed in the browser and never uploaded anywhere. The one thing that does leave the machine is a set of small requests to the elevation tile host, to read the ground's height along each route — see [Elevation comes from a model](#elevation-comes-from-a-model).
 
-> **Status: phases 1–5 of 7 complete.** Loading GPX files, the track legend, driving a run with simultaneous markers on a shared clock, and the elevation/speed chart all work today. Legend toggles, follow camera, and single-file sharing are planned but **not implemented yet**. See [Roadmap](#roadmap).
+> **Status: phases 1–5 of 7 complete.** Loading GPX files, the track legend, driving a run with simultaneous markers on a shared clock, and the elevation/speed chart all work today. Legend toggles, follow camera, and single-file sharing are planned but **not implemented yet**. A terrain model supplies the elevation, so two runs of one course can be compared even when their recorded altitudes disagree. See [Roadmap](#roadmap).
 
 ## Features
 
@@ -20,6 +20,7 @@ Working now:
 - **Simultaneous animation** on one shared clock — press play and every track advances together, each measured from its own `t0`. Tracks recorded hours apart start side by side and the legend records how far apart they were recorded; a track that runs out of points freezes and dims. See [Playback](#playback).
 - **Transport you can actually operate with** — scrub the timeline and the map follows the pointer, run at 1× to 300×, and drive it all from the keyboard. Per-track readouts in the legend show where each ride has got, counting from its own start.
 - **An elevation and speed chart** for every loaded ride, drawn against distance in each ride's own colour, with a marker per ride following the playhead and a click anywhere on the chart to seek to it. See [The chart](#the-chart).
+- **Elevation from a terrain model, not from your watch** — the profile is the height of the ground, so two runs of one course can be compared against each other even when their recorded altitudes do not agree. See [Elevation comes from a model](#elevation-comes-from-a-model).
 
 ## Requirements
 
@@ -151,6 +152,11 @@ src/
     markerFeatures.test.ts
     readout.ts                per-track elapsed time and distance covered
     readout.test.ts
+  terrain/
+    elevation.ts             tile maths, Terrarium decode, sampling, fallback
+    elevation.test.ts
+    demClient.ts             tile fetch, decode, cache, concurrency
+    demClient.test.ts
   map/
     basemaps.ts               the five styles + localStorage persistence
     basemaps.test.ts          style table, id validation, storage fallback
@@ -244,6 +250,20 @@ The panel along the bottom draws **every loaded ride against distance**, each in
 
 Two things about the drawing that are deliberate rather than incidental. **Both ends of an axis are labelled in one unit**, chosen from the larger end of the range — a speed axis from 0 to 5.4 m/s labelled `19.4 km/h` at the top and `0.0 m/s` at the bottom would ask the reader to convert between its own labels. And a profile is **decimated to at most 1200 points** by averaging, not sampling: a 200,000-point track has far more points than the panel has pixels, and picking every Nth sample would alias badly whenever a climb landed between two chosen ones. The axis is measured from the decimated profile, so it is always wide enough for what is drawn and nothing can fall off the top of it.
 
+## Elevation comes from a model
+
+A GPX file's altitudes are whatever the watch that wrote it believed, and two watches rarely agree. Barometric watches drift, satellite watches wander by several metres, and a watch reset mid-ride can be a couple of hundred metres out for the rest of the file. For an app whose whole purpose is comparing one run against another, that is the wrong input: the interesting difference between two rides gets buried under an instrumentation difference that has nothing to do with the riding.
+
+So elevation is read from a terrain model instead, from [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) in the [Terrarium](https://github.com/tilezen/joerd/blob/master/docs/terrarium.md) encoding, as SRTM-derived heightmaps at up to z14. Every track's `ele` array is replaced with elevations sampled from the model, which is what the chart draws and what anything else reading the track gets. The tile host is `s3.amazonaws.com`; there is no key, no account, and no rate limit.
+
+**The track appears immediately and is corrected a moment later.** A file is never held back waiting for a network. It loads and draws with the altitudes it arrived with, and each is upgraded in place when its model answers. Nothing on screen is ever a half-applied mixture of the two.
+
+**When the model cannot be reached, the recorded altitude is kept, silently.** A blocked request, an offline browser, or a host that is down leaves the profile exactly as the file had it. This is deliberately not reported as an error: an elevation that is 10 m out is a better answer than no chart, and a warning that cannot be acted on is noise. Nothing is retried, and no track is held back. A model that answers for some tiles and not others falls back point by point, so a hole in the data costs one fix rather than the whole ride.
+
+**What the model is good for, and what it is not.** Heights are good to roughly ±10 m, which is better than most consumer watches and far better than a watch that has drifted. It reads the **ground**, not the rider: a bridge is the height of the river under it and a tunnel is the height of the hillside over it, so a ride whose profile drops into a tunnel loses a climb it actually made. It is a model of the surface, resampled and generalised, and it knows nothing about a road that has been cut or a bridge that has been built since it was measured. Treat a profile as the shape of the ground, not as a record of what a barometer did.
+
+**What it costs in privacy.** No GPX file is uploaded, and no coordinate is sent to the elevation host. What is sent is a handful of requests for map tiles covering the area a track runs through — so the _general area_ of a ride is visible to that host and to whoever watches the connection, in the same way the basemap tiles already reveal the area you are looking at. A ride on a private road, a trail, or a route you would rather not be known about, is known to the tile host by its tile and nothing more. Blocking that host is a supported way to run the app: every profile falls back to the recorded altitude, which is how it behaved before this existed.
+
 ## Troubleshooting
 
 **Blank grey map, and the console shows `Worker failed to load`.**
@@ -257,6 +277,9 @@ The OpenFreeMap tileset goes to zoom 14, so zooming past z14 overzooms the maxim
 
 **`localStorage` selection is not remembered.**
 Some privacy modes block storage. The app catches this and falls back to the default basemap rather than failing.
+
+**The profile looks like my watch's, not like a map's.**
+The terrain model was not reached, so the recorded altitudes were kept. Check whether requests to `s3.amazonaws.com/elevation-tiles-prod` are being blocked, by a content blocker, a privacy extension, or an offline machine. This is silent by design and there is no banner: a chart drawing the file's own altitudes is exactly what a blocked model looks like.
 
 **A file is rejected with "No track points found".**
 The file parsed, but contained no `<trkpt>` — only waypoints or routes, or a route-only export. Mapimator animates recorded tracks, not planned routes. Re-export from your tracking app as a GPX track.

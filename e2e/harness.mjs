@@ -131,28 +131,43 @@ export async function launchBrowser() {
  * without this the suite would die as an opaque 30 s `waitForFunction` timeout
  * that reads like a code failure.
  */
-export async function preflight(
-    url = 'https://tiles.openfreemap.org/styles/liberty',
-    timeoutMs = 10_000,
-) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        const response = await fetch(url, { signal: controller.signal });
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+/** The two hosts the suite depends on, checked before a browser is launched. */
+export const PREFLIGHT_URLS = [
+    'https://tiles.openfreemap.org/styles/liberty',
+    // A real elevation tile, so a network that reaches the basemap host but not
+    // this one is reported as the environment problem it is rather than as a
+    // mysterious chart assertion later on.
+    'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/12/2138/1442.png',
+];
+
+/**
+ * Fails with a plain environment message unless every given host answers. Takes
+ * one URL or a list of them, and checks them in order so the message names the
+ * first one that failed.
+ */
+export async function preflight(url = PREFLIGHT_URLS, timeoutMs = 10_000) {
+    const urls = Array.isArray(url) ? url : [url];
+    for (const one of urls) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(one, { signal: controller.signal });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            await response.body?.cancel();
+        } catch (error) {
+            throw new Error(
+                `Cannot reach ${one} (${error.message}).\n\n` +
+                    'The e2e suite renders real OpenFreeMap styles and tiles, and reads real ' +
+                    'elevation tiles, so it needs live network access to both hosts. Check ' +
+                    'connectivity, then re-run. This is an environment problem, not a code ' +
+                    'problem.\n' +
+                    'Unit tests need no network:  npm test',
+            );
+        } finally {
+            clearTimeout(timer);
         }
-        await response.body?.cancel();
-    } catch (error) {
-        throw new Error(
-            `Cannot reach ${url} (${error.message}).\n\n` +
-                'The e2e suite renders real OpenFreeMap styles and tiles, so it needs live ' +
-                'network access. Check connectivity, then re-run. This is an environment ' +
-                'problem, not a code problem.\n' +
-                'Unit tests need no network:  npm test',
-        );
-    } finally {
-        clearTimeout(timer);
     }
 }
 

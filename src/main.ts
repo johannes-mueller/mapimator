@@ -3,11 +3,13 @@ import './style.css';
 import { readStoredBasemapId } from './map/basemaps';
 import { createMapView } from './map/mapView';
 import type { MapViewHandle } from './map/mapView';
+import type { Track } from './types';
 import { fitTracksInView } from './map/trackLayers';
 import { GpxParseClient } from './gpx/parseClient';
 import { createTrackStore } from './tracks/trackStore';
 import { createBasemapSwitcher } from './ui/basemapSwitcher';
 import { createDropzone } from './ui/dropzone';
+import { createTerrainSource } from './terrain/demClient';
 import { createChart } from './ui/chart';
 import type { ChartHandle } from './ui/chart';
 import { createLegend } from './ui/legend';
@@ -23,6 +25,11 @@ declare global {
             /** Exposed so the E2E suite can drive playback deterministically. */
             playback: TransportHandle;
             chart: ChartHandle;
+            /**
+             * How the elevation models are getting on, so the E2E suite can wait
+             * for a network round trip to finish instead of guessing at a delay.
+             */
+            terrain: { pending: () => number; applied: () => number };
         };
     }
 }
@@ -73,6 +80,38 @@ const transport = createTransport({
     getTracks: () => store.getAll(),
 });
 
+const terrain = createTerrainSource();
+
+/** Tracks still waiting on a model, and tracks the model has answered for. */
+let terrainPending = 0;
+let terrainApplied = 0;
+
+/**
+ * Replace a track's recorded altitude with elevations sampled from a model.
+ *
+ * Deliberately not awaited by the load: the track appears on the map immediately
+ * with the altitude the watch recorded, and is upgraded a moment later when the
+ * model answers. Nothing about loading a file should wait on a network, and the
+ * fallback is the app's normal state rather than an error worth reporting.
+ */
+const applyTerrain = (id: string, track: Track): void => {
+    terrainPending += 1;
+    void terrain
+        .load(track)
+        .then((ele) => {
+            if (ele && store.updateElevation(id, ele)) {
+                terrainApplied += 1;
+            }
+        })
+        .catch(() => {
+            // Already swallowed by the source; this is belt and braces, because a
+            // thrown elevation must never take a loaded file down with it.
+        })
+        .finally(() => {
+            terrainPending -= 1;
+        });
+};
+
 // The chart follows the same clock the map does, and clicking it seeks that same
 // clock, so it is wired to the transport rather than owning a time of its own.
 const chart = createChart(requireElement<HTMLElement>('chart-region'), (elapsedMs) => {
@@ -85,6 +124,10 @@ window.mapimator = {
     trackCount: () => store.getAll().length,
     playback: transport,
     chart,
+    terrain: {
+        pending: () => terrainPending,
+        applied: () => terrainApplied,
+    },
 };
 
 const switcher = createBasemapSwitcher(
@@ -143,7 +186,10 @@ async function loadFiles(files: File[]): Promise<void> {
             try {
                 const result = await parser.parseFile(file);
                 const wasEmpty = store.getAll().length === 0;
-                store.add(result.tracks);
+                const added = store.add(result.tracks);
+                for (const track of added) {
+                    applyTerrain(track.id, track);
+                }
                 addedCount += result.tracks.length;
                 if (wasEmpty) {
                     const bounds = store.getCombinedBounds();

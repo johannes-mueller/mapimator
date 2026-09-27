@@ -26,8 +26,30 @@ const labelReads = (label, expected, unit) => {
     const [number, written] = label.split(' ');
     const decimals = (number.split('.')[1] ?? '').length;
     const read = Number(number.replace(/,/g, '')) * UNIT_SCALE[written];
-    return written === unit && Math.abs(read - expected) <= 0.5 * 10 ** -decimals;
+    // The tolerance is the half of the last digit the label prints, and it is
+    // scaled into metres before it is compared: "0.9 km" is allowed to stand for
+    // 937.9 m, and "0.9 km" is also allowed to mean nothing more precise than
+    // 950 m. Left unscaled it would be half a centimetre, which is not what a
+    // label with one digit is claiming, and the check would reject a correct
+    // answer for being written in kilometres.
+    return (
+        written === unit && Math.abs(read - expected) <= 0.5 * 10 ** -decimals * UNIT_SCALE[written]
+    );
 };
+
+/**
+ * Wait for every elevation model the app has been asked for to finish, answered
+ * or given up on.
+ *
+ * Elevations are read from a terrain model once it answers, which happens after
+ * the file has loaded, so a spec that reads them straight after a load reads two
+ * different sets of numbers: the watch's on the first read and the ground's on
+ * every read after that. Waiting here means each section reads one set.
+ */
+const waitForModels = (page) =>
+    page.waitForFunction(() => window.mapimator.terrain.pending() === 0, null, {
+        timeout: 60_000,
+    });
 
 const load = async (page, dir, ...names) => {
     await page.setInputFiles(
@@ -163,6 +185,22 @@ const speedAt = (facts, index) =>
     (facts.distM[index + 1] - facts.distM[index - 1]) /
     (facts.timesS[index + 1] - facts.timesS[index - 1]);
 
+/**
+ * Where a ride's elevation at a given fix falls in the plot, in the SVG's own
+ * pixels, worked out from the axis the chart is currently using.
+ *
+ * A click is placed on the *line* rather than at the top or the bottom of the
+ * plot, because which of two rides is on top of a plot is a property of where
+ * they are on the ground. The Climber and the Cruiser are a degree apart, so on
+ * the model's elevations the Cruiser is the higher of the two by two kilometres,
+ * and a click at the top of the plot lands on the Cruiser whatever the test
+ * meant. Placing the click on the line makes the check say what it is about.
+ */
+const pointOnLine = (state, xMax, distanceM, metres) => ({
+    x: state.plot.left + (distanceM / xMax) * state.plot.width,
+    y: state.plot.top + (1 - (metres - state.yMin) / (state.yMax - state.yMin)) * state.plot.height,
+});
+
 /** Click a data point on the chart, in the SVG's own pixel coordinates. */
 const clickAt = async (page, x, y) => {
     await page.locator('#chart-region .chart-plot').click({ position: { x, y } });
@@ -193,6 +231,7 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
 
     suite.section('TWO RIDES, A CLIMB AND A STOP');
     await load(page, fixtureDir, 'chart-rides.gpx');
+    await waitForModels(page);
     const facts = await page.evaluate(trackFacts);
     const climber = byName(facts, 'Climber');
     const cruiser = byName(facts, 'Cruiser');
@@ -261,16 +300,30 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
         JSON.stringify(loaded.label),
     );
 
-    // Climber runs 400 m to 520 m and back, Cruiser 380 m to 400 m, so the axis
-    // has to span both rides rather than just the one on screen.
+    // The axis has to span every ride on it rather than just the one on screen,
+    // and it is read against the store's own elevations rather than numbers
+    // written out here: the elevations are the ground's, wherever they came from,
+    // and a check that carried a copy of them would be testing the copy.
+    const rideMin = Math.min(...facts.flatMap((f) => f.eleM));
+    const rideMax = Math.max(...facts.flatMap((f) => f.eleM));
     suite.check(
         'the y-axis covers every ride on the chart',
-        loaded.yMin === 380 && loaded.yMax === 520,
-        `${loaded.yMin}..${loaded.yMax}`,
+        loaded.yMin === rideMin && loaded.yMax === rideMax,
+        `${loaded.yMin}..${loaded.yMax} against ${rideMin}..${rideMax}`,
     );
     suite.check(
+        'and the two rides really do sit far enough apart to need that',
+        rideMax - rideMin > 100,
+        `${rideMin}..${rideMax}`,
+    );
+    // In whatever unit the axis chose. These rides are a kilometre and change
+    // apart on the model's elevations, and a label that insisted on metres would
+    // be rejecting a correct answer; the next check holds it to using one unit
+    // for both ends, and the one after that to that unit being the axis's.
+    suite.check(
         'and labels both ends with the numbers on the axis',
-        labelReads(loaded.yLabels[0], 520, 'm') && labelReads(loaded.yLabels[1], 380, 'm'),
+        labelReads(loaded.yLabels[0], rideMax, unitOf(loaded.yLabels[0])) &&
+            labelReads(loaded.yLabels[1], rideMin, unitOf(loaded.yLabels[1])),
         JSON.stringify(loaded.yLabels),
     );
     suite.check(
@@ -500,7 +553,7 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     const back = await page.evaluate(chartState);
     suite.check(
         'and the elevation axis comes back',
-        back.metric === 'elevation' && back.yMax === 520,
+        back.metric === 'elevation' && back.yMax === rideMax,
         `${back.metric}/${back.yMax}`,
     );
     suite.check(
@@ -514,13 +567,14 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
 
     suite.section('CLICKING THE CHART TO SEEK');
     await page.evaluate(() => window.mapimator.playback.seek(0));
-    // Climber's peak is the top of the y-axis at fix 12, and Cruiser is near the
-    // bottom of it at the same distance, so a click there can only mean Climber.
-    // The peak is at 1:35, so the seek has to land there and nowhere else.
-    const peakIndex = 11;
+    // The Climber's own peak, found in its elevations rather than written down
+    // here, and clicked *on its line*. Its peak is the highest fix it has, so a
+    // click there can only mean that fix, and the seek has to land on that fix's
+    // time and nowhere else.
+    const peakIndex = climber.eleM.indexOf(Math.max(...climber.eleM));
     const peakDistance = climber.distM[peakIndex];
-    const peakX = halfway.plot.left + (peakDistance / loaded.xMax) * halfway.plot.width;
-    await clickAt(page, peakX, halfway.plot.top + 2);
+    const peak = pointOnLine(halfway, loaded.xMax, peakDistance, climber.eleM[peakIndex]);
+    await clickAt(page, peak.x, peak.y);
     const afterPeak = await page.evaluate(() => window.mapimator.playback.getElapsedMs());
     suite.check(
         'clicking the peak of a ride seeks to when it was there',
@@ -539,13 +593,22 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     const nearStart = await page.evaluate(() => window.mapimator.playback.getElapsedMs());
     suite.check('clicking the far left seeks to the start', nearStart < 2 * S, `${nearStart}ms`);
 
-    // The far right of the axis is Climber's finish, and only Climber's line is
-    // there — Cruiser is half as long. So the click seeks to the end of the ride it
-    // landed on, which is *not* the shared total: the timeline runs as long as the
-    // longest ride, and that one is this ride, the shorter. Worth pinning, because the
-    // obvious thing to expect is the end of the timeline.
+    // The far right of the axis is the Climber's finish — it and the Cruiser cover
+    // the same ground, so they finish at the same distance, and the Climber is the
+    // lower of the two on the model's elevations. The click is placed on the
+    // Climber's own line at that distance, so it lands on the Climber and nothing
+    // else can answer for it. The seek then has to be the *end of that ride*, which
+    // is not the shared total: the timeline runs as long as the longest ride, and
+    // that one is the Cruiser. Worth pinning, because the obvious thing to expect is
+    // the end of the timeline.
     await page.evaluate(() => window.mapimator.playback.seek(0));
-    await clickAt(page, halfway.plot.left + halfway.plot.width - 1, halfway.plot.top + 2);
+    const finish = pointOnLine(
+        halfway,
+        loaded.xMax,
+        climber.distM[climber.distM.length - 1],
+        climber.eleM[climber.eleM.length - 1],
+    );
+    await clickAt(page, finish.x - 1, finish.y);
     const nearEnd = await page.evaluate(() => window.mapimator.playback.getElapsedMs());
     const total = await page.evaluate(() => window.mapimator.playback.getTotalMs());
     suite.check(
@@ -636,6 +699,7 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
 
     suite.section('A SECOND COPY OF THE RIDES');
     await load(page, fixtureDir, 'chart-rides.gpx');
+    await waitForModels(page);
     const five = await page.evaluate(chartState);
     const fiveFacts = await page.evaluate(trackFacts);
     suite.check(
@@ -659,15 +723,23 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     // extremes are bucket averages and can sit inside the real ones. The axis follows
     // what is drawn, which is why nothing can ever fall off the top of it.
     const elevations = fiveFacts.flatMap((f) => f.eleM);
+    const lowest = Math.min(...elevations);
+    const highest = Math.max(...elevations);
+    // The axis follows the drawn curve, and the long ride's ends are bucket
+    // averages of decimated data, so each end of the axis can sit a little inside
+    // the true extreme. One percent of the span is the room it is given, and it is
+    // room rather than a second number to match, because how far inside a
+    // decimated bucket average lands is a property of the decimation.
+    const slack = (highest - lowest) * 0.01;
     suite.check(
         'and the y-axis still covers every one of them',
-        five.yMin <= 380 && five.yMax >= 520,
-        `${five.yMin}..${five.yMax} does not cover 380..520`,
+        five.yMin <= lowest + slack && five.yMax >= highest - slack,
+        `${five.yMin}..${five.yMax} does not cover ${lowest}..${highest}`,
     );
     suite.check(
         'without inventing a range the rides do not have',
-        five.yMin === 380 && five.yMax <= Math.max(...elevations),
-        `${five.yMin}..${five.yMax} against ${Math.min(...elevations)}..${Math.max(...elevations)}`,
+        five.yMin >= lowest && five.yMax <= highest,
+        `${five.yMin}..${five.yMax} against ${lowest}..${highest}`,
     );
 
     suite.check('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '));
