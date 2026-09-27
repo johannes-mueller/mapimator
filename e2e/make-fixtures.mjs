@@ -138,10 +138,10 @@ ${Array.from(
 ).join('\n')}
   </trkseg></trk>`),
 
-    // Two rides ninety seconds apart, so the shared clock reaches the second one
-    // late and it is legitimately *pending* rather than sitting at zero. Steps by
-    // 0.01 degrees every 30 s along one straight line, which makes the distance at
-    // any point along the track a fixed share of its total.
+    // Two rides ninety seconds apart, which playback measures from each ride's own
+    // start, so they run side by side however far apart they were recorded. Steps
+    // by 0.01 degrees every 30 s along one straight line, which makes the distance
+    // at any point along the track a fixed share of its total.
     'offset-riders.gpx': () =>
         gpx(`  <trk><name>Early Rider</name><trkseg>
 ${[0, 1, 2, 3, 4, 5, 6]
@@ -153,6 +153,100 @@ ${[0, 1, 2, 3, 4, 5, 6]
     .map((i) => `  ${pt(45.0 + i * 0.01, 6.0 + i * 0.01, 400, iso(T0, 90 + i * 30))}`)
     .join('\n')}
   </trkseg></trk>`),
+
+    /**
+     * Two rides for the chart: a climb with a stop in the middle, and a flatter ride
+     * alongside it at half the moving speed.
+     *
+     * Distance is walked in steps of 0.0002 degrees rather than written out, and
+     * elevation is a function of that step, so the stop holds both — a rider who is
+     * not moving does not gain height either. The stop is a gap in *time*, not in
+     * coordinates: the fixes either side of it are 25 seconds apart. That is what a
+     * stop looks like in a file, and it matters here, because freezing the
+     * coordinates and then jumping them would put 190 m into a single 5 s interval
+     * and the chart would faithfully report a 38 m/s sprint out of a rider who never
+     * moved that fast.
+     *
+     * Both rides cover the same 20 steps of ground, and while they are moving Climber
+     * takes a step every 5 s where Cruiser takes one every 10 s, so the fast ride is
+     * about twice the slow one. Not exactly: the two are at different latitudes, and
+     * a degree of longitude is shorter the further north you go, so their steps are
+     * not quite the same length. Cruiser never stops, so its speed profile is dead
+     * flat, which is a shape worth having in a fixture. Climber takes longer over the
+     * whole ride than its distance alone suggests, because of the stop.
+     *
+     * Elevations are exact: Climber runs 400 m up to 520 m and back down, Cruiser
+     * 380 m to 400 m, so the shared y-axis is 380 to 520 and can be asserted on
+     * rather than merely measured.
+     */
+    'chart-rides.gpx': () => {
+        const STEP = 0.0002;
+        const LAT0 = 47;
+        const LON0 = 8;
+
+        // Climber: a fix every 5 s up to the top of the climb at 0:45, one 25 s
+        // either side of a 50 s stop at 1:10, then a fix every 5 s to the bottom.
+        // The peak lands on the first fix after the stop, at 1:35.
+        const climberFixes = [
+            [0, 0],
+            [1, 5],
+            [2, 10],
+            [3, 15],
+            [4, 20],
+            [5, 25],
+            [6, 30],
+            [7, 35],
+            [8, 40],
+            [9, 45],
+            [9, 70],
+            [10, 95],
+            [11, 100],
+            [12, 105],
+            [13, 110],
+            [14, 115],
+            [15, 120],
+            [16, 125],
+            [17, 130],
+            [18, 135],
+            [19, 140],
+            [20, 145],
+        ];
+        const climber = climberFixes
+            .map(
+                ([step, seconds]) =>
+                    `  ${pt(
+                        LAT0 + step * STEP,
+                        LON0 + step * STEP,
+                        Math.round(400 + 120 * Math.sin((Math.PI * step) / 20)),
+                        iso(T0, seconds),
+                    )}`,
+            )
+            .join('\n');
+
+        // Cruiser: the same 20 steps of ground at half the rate, a fix every 5 s, so
+        // its speed window sees a neighbour and it reads as a steady half of Climber's
+        // speed. Half a step a fix means 0.0001 degrees, so it takes 40 fixes to get
+        // there: 200 s for the distance Climber covered in 145.
+        const cruiserFixes = Array.from({ length: 41 }, (_, i) => [i / 2, i * 5]);
+        const cruiser = cruiserFixes
+            .map(
+                ([step, seconds], i) =>
+                    `  ${pt(
+                        LAT0 - 1 + step * STEP,
+                        LON0 - 1 + step * STEP,
+                        Math.round(380 + i / 2),
+                        iso(T0, seconds),
+                    )}`,
+            )
+            .join('\n');
+
+        return gpx(`  <trk><name>Climber</name><trkseg>
+${climber}
+  </trkseg></trk>
+  <trk><name>Cruiser</name><trkseg>
+${cruiser}
+  </trkseg></trk>`);
+    },
 
     // 60k points, to confirm the worker path stays off the main thread.
     'bulk.gpx': () => {

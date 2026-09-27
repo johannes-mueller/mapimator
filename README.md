@@ -4,7 +4,7 @@ A static web app for loading multiple GPX tracks and animating them **simultaneo
 
 Built for comparing repeat runs of the same course: each track's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The finished state is deliberately server-free — files are parsed in the browser and never leave the machine.
 
-> **Status: phases 1–4 of 7 complete.** Loading GPX files, the track legend, and driving a run with simultaneous markers on a shared clock all work today. The chart panel, legend toggles, follow camera, and single-file sharing are planned but **not implemented yet**. See [Roadmap](#roadmap).
+> **Status: phases 1–5 of 7 complete.** Loading GPX files, the track legend, driving a run with simultaneous markers on a shared clock, and the elevation/speed chart all work today. Legend toggles, follow camera, and single-file sharing are planned but **not implemented yet**. See [Roadmap](#roadmap).
 
 ## Features
 
@@ -19,6 +19,7 @@ Working now:
 - **Static polylines** drawn as a `MultiLineString`, so a recorded pause is left blank rather than joined by a straight line.
 - **Simultaneous animation** on one shared clock — press play and every track advances together, each measured from its own `t0`. Tracks recorded hours apart start side by side and the legend records how far apart they were recorded; a track that runs out of points freezes and dims. See [Playback](#playback).
 - **Transport you can actually operate with** — scrub the timeline and the map follows the pointer, run at 1× to 300×, and drive it all from the keyboard. Per-track readouts in the legend show where each ride has got, counting from its own start.
+- **An elevation and speed chart** for every loaded ride, drawn against distance in each ride's own colour, with a marker per ride following the playhead and a click anywhere on the chart to seek to it. See [The chart](#the-chart).
 
 ## Requirements
 
@@ -57,15 +58,15 @@ Other commands:
 4. Pick a basemap from the buttons in the top-right. Try **Dark** or **Fiord** for a low-glare basemap, **Positron** for maximum contrast against track colours.
 5. Pan and zoom as usual. The attribution line at the bottom-left credits the data source and must stay visible.
 
-The chart and the playback bar are still placeholders, each labelled with the phase that will make it work, so the interface does not advertise anything that does not exist yet.
+6. Read the chart along the bottom: a marker per ride follows the playhead, the toggle switches the whole panel between elevation and speed, and clicking anywhere on the chart seeks to that point in the run.
 
 ## Testing
 
 There are two layers, and they answer different questions.
 
-**Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, the E2E harness itself, and formatting. They run in a Node environment with no DOM and need no network, so they are fast — the whole suite takes under a second.
+**Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, the E2E harness itself, the chart's profile building, decimation, distance inversion, and one-unit axis labels, and formatting. They run in a Node environment with no DOM and need no network, so they are fast — the whole suite takes under a second.
 
-**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that playback does not hijack the camera, that a recorded pause parks the marker instead of gliding it across the gap, that `dist/` really works from a subpath, and that a 60,000-point file never blocks the main thread. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
+**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that playback does not hijack the camera, that a recorded pause parks the marker instead of gliding it across the gap, that a clicked chart really seeks the run, and that `dist/` really works from a subpath. It also charts a 60,000-point file, so a profile too long to draw point for point is exercised in a real browser. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
 
 The E2E suite needs **live network access to `tiles.openfreemap.org`** — it renders the real styles and the real tiles, because a recorded snapshot would test the recording rather than the app. It preflights that endpoint before launching a browser, so a connectivity problem reports itself as an environment problem instead of a 30-second timeout:
 
@@ -155,10 +156,14 @@ src/
     basemaps.test.ts          style table, id validation, storage fallback
     mapView.ts                MapLibre setup and style switching
     trackLayers.ts            overlay sources, layers, rendering, fitBounds
+  chart/
+    profile.ts                the metric against distance, decimation, inverses
+    profile.test.ts
   ui/
     basemapSwitcher.ts        basemap buttons
     dropzone.ts               drag-and-drop, file picker, parse status
     legend.ts                 track list
+    chart.ts                  the chart panel: axes, profiles, markers, seek
     transport.ts              play, scrub, speed, keys, readout, frame loop
     transport.test.ts
     transportKeys.ts          key bindings and the focused-control filter
@@ -173,6 +178,7 @@ e2e/
   subpath.spec.mjs            dist/ served from a subpath, as a project site is
   tracks.spec.mjs             parsing, geometry, gaps, errors, large file
   playback.spec.mjs           the shared clock, markers, play/pause, gap parking
+  chart.spec.mjs              the chart panel: axes, profiles, markers, click-to-seek
   transport.spec.mjs          scrubbing, speed, keyboard, legend readouts
 ```
 
@@ -202,7 +208,7 @@ One consequence worth knowing before editing: `Track.tRel` is in **seconds** whi
 | 2. GPX parser, Web Worker, dropzone, legend, static polylines              | **Done** |
 | 3. Shared clock, interpolation, simultaneous marker animation              | **Done** |
 | 4. Timeline scrubbing, speed multiplier, keyboard transport, live readouts | **Done** |
-| 5. Chart panel (elevation/speed, time/distance axis)                       | Planned  |
+| 5. Chart panel (elevation/speed, time/distance axis)                       | **Done** |
 | 6. Legend toggles, follow camera, rendering polish                         | Planned  |
 | 7. Single-file build for easy sharing                                      | Planned  |
 
@@ -225,6 +231,18 @@ A marker inside a **recorded pause** stops at the end of the segment it has just
 Arrow steps are a percentage of the total on purpose, and the keyboard handler deliberately declines keys that a focused control already handles. Pressing <kbd>Space</kbd> on the focused play button would otherwise toggle twice — once from the click the browser sends, and once from the key. The same goes for the arrows on a focused timeline, which already seek through their own `input` event. Space is the one key taken back from the timeline, because a range does nothing with it and a drag leaves focus there.
 
 Frames stay cheap. The frame loop only runs while playing, redraws come from the clock's change notification rather than the frame callback, DOM writes are skipped when the text has not changed, and the line geometry is rebuilt only when the set of finished tracks actually changes — `buildLineFeatures` walks every sample of every track, and doing that sixty times a second would make a large file unplayable. Playback never moves the camera.
+
+## The chart
+
+The panel along the bottom draws **every loaded ride against distance**, each in its own colour, and there is a toggle for which quantity to plot: **elevation** in metres, or **speed** in m/s or km/h. A marker on each line follows the playhead, so the panel and the map are showing the same moment from two directions, and **clicking anywhere on the chart seeks** to that point in the run.
+
+**Distance is the x-axis, so the two directions of the same ride are not the same thing.** A marker's position along the line is where that ride has got, which is its distance — but its _height_ on the line is the metric at the playhead, read by time. The two differ exactly where a ride is interesting: across a recorded stop, the distance stops changing while the speed does not, and a stop plotted against distance is a **vertical drop** through the same distance twice. Read by distance, a rider waiting at a junction would report the speed they had on the way in. Read by time, the marker sits at the foot of the drop, where the line actually shows the ride standing still.
+
+**Speed is smoothed over 15 seconds**, centred on each fix. Raw speed between two GPS fixes is mostly noise — one bad coordinate implies a sprint or a standstill that never happened — and averaging the distance covered across a short window gives a number a rider would recognise. The window is centred rather than trailing because a profile shows the whole ride, and a trailing window would read half a minute late at the end of every one. The window is clipped at the ends of a ride rather than padded, so the first and last fixes average over the samples that actually exist instead of over a window that reaches past the start of the ride.
+
+**A click seeks against the ride nearest the pointer.** One click cannot put every ride exactly where the pointer is, because one moment in time and one distance are different things for rides of different lengths. So the chart inverts the profile it was aimed at: the ride you pointed at lands exactly there, and the others arrive at the same moment. It is the same rule the map follows, and clicking past the end of a line means the end of that ride rather than the end of the timeline.
+
+Two things about the drawing that are deliberate rather than incidental. **Both ends of an axis are labelled in one unit**, chosen from the larger end of the range — a speed axis from 0 to 5.4 m/s labelled `19.4 km/h` at the top and `0.0 m/s` at the bottom would ask the reader to convert between its own labels. And a profile is **decimated to at most 1200 points** by averaging, not sampling: a 200,000-point track has far more points than the panel has pixels, and picking every Nth sample would alias badly whenever a climb landed between two chosen ones. The axis is measured from the decimated profile, so it is always wide enough for what is drawn and nothing can fall off the top of it.
 
 ## Troubleshooting
 

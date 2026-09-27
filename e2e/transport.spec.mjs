@@ -359,6 +359,13 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
     // the step *and* by a percent of the run.
     await page.locator('#timeline').focus();
     const step = Number((await page.evaluate(transportState)).timelineStep);
+    // Parked on a whole number of steps first. The `space` and `k` presses above
+    // each ran the clock for a moment, and paused it wherever the animation frame
+    // happened to land — a fraction of a step. A focused range snaps an arrow press
+    // to its own step grid, so from a fractional value one press moves it to the
+    // next step rather than *by* a step, and this would be measuring the rounding.
+    await page.evaluate(() => window.mapimator.playback.pause());
+    await page.evaluate(() => window.mapimator.playback.seek(0));
     const before = (await page.evaluate(transportState)).elapsed;
     await page.keyboard.press('ArrowRight');
     const afterArrow = (await page.evaluate(transportState)).elapsed;

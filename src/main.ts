@@ -8,6 +8,8 @@ import { GpxParseClient } from './gpx/parseClient';
 import { createTrackStore } from './tracks/trackStore';
 import { createBasemapSwitcher } from './ui/basemapSwitcher';
 import { createDropzone } from './ui/dropzone';
+import { createChart } from './ui/chart';
+import type { ChartHandle } from './ui/chart';
 import { createLegend } from './ui/legend';
 import { createTransport } from './ui/transport';
 import type { TransportHandle } from './ui/transport';
@@ -20,6 +22,7 @@ declare global {
             trackCount: () => number;
             /** Exposed so the E2E suite can drive playback deterministically. */
             playback: TransportHandle;
+            chart: ChartHandle;
         };
     }
 }
@@ -70,11 +73,18 @@ const transport = createTransport({
     getTracks: () => store.getAll(),
 });
 
+// The chart follows the same clock the map does, and clicking it seeks that same
+// clock, so it is wired to the transport rather than owning a time of its own.
+const chart = createChart(requireElement<HTMLElement>('chart-region'), (elapsedMs) => {
+    transport.seek(elapsedMs);
+});
+
 window.mapimator = {
     ...view,
     store,
     trackCount: () => store.getAll().length,
     playback: transport,
+    chart,
 };
 
 const switcher = createBasemapSwitcher(
@@ -97,6 +107,7 @@ const legend = createLegend(
 );
 transport.subscribe(() => {
     legend.updateReadouts();
+    chart.update(transport.getElapsedMs());
 });
 
 const dropzone = createDropzone({
@@ -166,6 +177,10 @@ async function loadFiles(files: File[]): Promise<void> {
 
 const redraw = (): void => {
     legend.render(store.getAll());
+    // The chart reads the tracks too, and has to redraw from the current clock
+    // position: a newly loaded track's dot belongs at the playhead, not at zero.
+    chart.render(store.getAll());
+    chart.update(transport.getElapsedMs());
     // The transport owns the track overlays, so a store change is handed to it
     // rather than rendered here: it has to update the shared clock as well.
     transport.refresh();
@@ -175,6 +190,8 @@ store.subscribe(redraw);
 view.onStyleReady(() => {
     switcher.setActive(view.getBasemapId());
     legend.render(store.getAll());
+    chart.render(store.getAll());
+    chart.update(transport.getElapsedMs());
     // A new style starts with empty sources, so the overlays are fed again.
     transport.redraw();
 });
