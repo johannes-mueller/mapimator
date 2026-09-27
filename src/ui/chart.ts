@@ -73,7 +73,7 @@ interface Drawn {
     points: ProfilePoint[];
     /** The metric at every fix, so a marker can read the playhead off it. */
     values: Float64Array;
-    line: SVGPolylineElement;
+    line: SVGPathElement;
     dot: SVGCircleElement;
     playhead: SVGLineElement;
     /** What the marker was last told to draw, so the state reports what is on screen. */
@@ -310,7 +310,11 @@ export function createChart(
 
         const visible = states.filter(({ visible: shown }) => shown);
         for (const { track } of visible) {
-            const line = svgEl('polyline', {
+            // A <path>, not a <polyline>: a polyline is drawn from a `points`
+            // attribute, and a `d` set on one is ignored without complaint, so the
+            // element keeps the right class, the right colour, and a full set of
+            // path data, and still paints nothing at all.
+            const line = svgEl('path', {
                 class: 'chart-profile',
                 fill: 'none',
                 stroke: track.color,

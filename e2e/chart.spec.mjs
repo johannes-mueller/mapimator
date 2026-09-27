@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { countDifferent, regionPixels } from './harness.mjs';
 
 const S = 1000;
 
@@ -61,6 +62,23 @@ const chartState = () => {
         trackId: el.dataset.trackId,
         stroke: el.getAttribute('stroke'),
         d: el.getAttribute('d') ?? '',
+        /**
+         * The length the SVG resolved, and the box it resolved to. An element can
+         * hold a complete set of path data, the right class, and the right colour
+         * and still paint nothing, because it was told about its shape in a way the
+         * element does not read. This is the only way to tell that apart.
+         */
+        drawnLength: (() => {
+            try {
+                return el.getTotalLength();
+            } catch {
+                return -1;
+            }
+        })(),
+        box: (() => {
+            const b = el.getBBox();
+            return { w: Math.round(b.width), h: Math.round(b.height) };
+        })(),
     }));
     return {
         placeholderShown: region.querySelector('.placeholder')?.hasAttribute('hidden') === false,
@@ -195,6 +213,47 @@ export async function run({ page, suite, errors, url, fixtures: fixtureDir }) {
         JSON.stringify(loaded.profiles.map((p) => p.stroke)),
     );
     suite.check('the plot is shown once there is something to draw', loaded.visible === true);
+
+    // The two checks above read the attributes. These read the pixels, because an
+    // element can be given path data in a form it does not read, and then hold a
+    // class, a colour, and a full set of coordinates while painting nothing at all.
+    // That is not a hypothetical: it is what a `d` on a <polyline> does.
+    suite.check(
+        'each profile resolves to a line with real length',
+        loaded.profiles.every((p) => p.drawnLength > 100),
+        JSON.stringify(loaded.profiles.map((p) => p.drawnLength)),
+    );
+    suite.check(
+        'which spans the plot rather than sitting at one point',
+        loaded.profiles.every(
+            (p) => p.box.w > 0.5 * loaded.plot.width && p.box.h > 0 && p.box.h < loaded.plot.height,
+        ),
+        JSON.stringify(loaded.profiles.map((p) => p.box)),
+    );
+    const plotPixels = await page.evaluate(() => {
+        const r = document.querySelector('.chart-plot').getBoundingClientRect();
+        return {
+            x: Math.round(r.x),
+            y: Math.round(r.y),
+            w: Math.round(r.width),
+            h: Math.round(r.height),
+        };
+    });
+    const painted = await regionPixels(page, plotPixels);
+    await page.evaluate(() => {
+        document.querySelector('.chart-profiles').style.visibility = 'hidden';
+    });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+    const withoutProfiles = await regionPixels(page, plotPixels);
+    await page.evaluate(() => {
+        document.querySelector('.chart-profiles').style.visibility = '';
+    });
+    const profilePixels = countDifferent(painted, withoutProfiles);
+    suite.check(
+        'and the profiles really are painted on screen',
+        profilePixels > 200,
+        `${profilePixels} px of the plot belong to the profiles`,
+    );
     suite.check('it starts on elevation', loaded.metric === 'elevation');
     suite.check(
         'and names itself for a screen reader',
