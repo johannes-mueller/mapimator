@@ -2,6 +2,9 @@
 
 A static web app for loading multiple GPX runs and animating them **simultaneously on a shared clock** over a switchable OpenStreetMap basemap.
 
+This is completely coded by a coding agent. It was my first experiment to code
+an entire meaningful application using a coding agent from scratch.
+
 Built for comparing repeat runs of the same course: each run's **own first timestamp is its `t0`**, so every marker starts together at the start line, and at elapsed `10:00` you see exactly where each run was ten minutes in. The app has no backend: your GPX files are parsed in the browser and never uploaded anywhere. The one thing that does leave the machine is a set of small requests to the elevation tile host, to read the ground's height along each route — see [Elevation comes from a model](#elevation-comes-from-a-model).
 
 > **Status: phases 1–5 of 7 complete, and most of phase 6.** Loading GPX files, the run legend, driving a run with simultaneous markers on a shared clock, and the elevation/speed chart all work today. A run can be switched off in the legend, and the camera now follows a played run without being asked. Rendering polish and single-file sharing are planned but **not implemented yet**. A terrain model supplies the elevation, so two runs of one course can be compared even when their recorded altitudes disagree. See [Roadmap](#roadmap).
