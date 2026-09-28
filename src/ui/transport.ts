@@ -7,6 +7,7 @@ import { createPlaybackClock } from '../playback/clock';
 import type { PlaybackClock } from '../playback/clock';
 import { formatDuration } from '../format';
 import { acceptsTransportKey, keyAction } from './transportKeys';
+import type { TransportKeyAction } from './transportKeys';
 
 const PLAY_ICON = '▶';
 const PAUSE_ICON = '❚❚';
@@ -296,18 +297,8 @@ export function createTransport(options: TransportOptions): TransportHandle {
         render(false);
     };
 
-    const onKeyDown = (event: Event): void => {
-        const keyEvent = event as KeyboardEvent;
-        const action = keyAction(keyEvent.key, keyEvent.shiftKey, clock.getTotalMs());
-        if (!action) {
-            return;
-        }
-        if (!acceptsTransportKey(keyEvent.target, timeline, keyEvent.key)) {
-            return;
-        }
-        // Only for keys we act on: Space would otherwise scroll the page, and the
-        // rest are ours alone.
-        keyEvent.preventDefault();
+    /** Act on a key that is ours: toggle, jump to an absolute time, or nudge. */
+    const applyKeyAction = (action: TransportKeyAction): void => {
         if (action.kind === 'toggle') {
             toggle();
         } else if (action.kind === 'seek') {
@@ -316,6 +307,18 @@ export function createTransport(options: TransportOptions): TransportHandle {
             const total = clock.getTotalMs();
             seek(clock.getElapsedMs() + (total * action.percent) / 100);
         }
+    };
+
+    const onKeyDown = (event: Event): void => {
+        const keyEvent = event as KeyboardEvent;
+        const action = keyAction(keyEvent.key, keyEvent.shiftKey, clock.getTotalMs());
+        if (!action || !acceptsTransportKey(keyEvent.target, timeline, keyEvent.key)) {
+            return;
+        }
+        // Only for keys we act on: Space would otherwise scroll the page, and the
+        // rest are ours alone.
+        keyEvent.preventDefault();
+        applyKeyAction(action);
     };
 
     clock.subscribe(() => {
