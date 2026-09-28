@@ -6,7 +6,7 @@ export const fixtures = [];
 
 const TEXT = {
     title: 'About Mapimator',
-    lead: 'Mapimator animates multiple GPX runs at the same time, on a shared clock, over a switchable OpenStreetMap basemap.',
+    lead: 'Mapimator animates multiple GPX runs simultaneously in a map.',
     privacy: 'never uploaded anywhere',
     bullets: [
         'Five switchable basemaps: Liberty, Positron, Bright, Fiord, and Dark',
