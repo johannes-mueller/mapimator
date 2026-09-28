@@ -316,8 +316,8 @@ export function createChart(
         xMax = distanceRange(drawn.map((entry) => entry.points));
     };
 
-    const render = (next: TrackState[]): void => {
-        states = next;
+    /** Empties every overlay group, so a render starts from a blank chart. */
+    const clearOverlays = (): void => {
         profiles.replaceChildren();
         dots.replaceChildren();
         // The guides have to be emptied here too, or every render leaves the
@@ -327,55 +327,57 @@ export function createChart(
         // later — which is what happens when elevations arrive from a model.
         guides.replaceChildren();
         drawn = [];
+    };
 
-        const visible = states.filter(({ visible: shown }) => shown);
-        for (const { track } of visible) {
-            // A <path>, not a <polyline>: a polyline is drawn from a `points`
-            // attribute, and a `d` set on one is ignored without complaint, so the
-            // element keeps the right class, the right colour, and a full set of
-            // path data, and still paints nothing at all.
-            const line = svgEl('path', {
-                class: 'chart-profile',
-                fill: 'none',
-                stroke: track.color,
-                'stroke-opacity': PROFILE_OPACITY,
-                'data-track-id': track.id,
-            });
-            const dot = svgEl('circle', {
-                class: 'chart-dot',
-                r: 3.5,
-                fill: track.color,
-                'data-track-id': track.id,
-            });
-            // A dashed guide down the plot at the distance this ride has reached, so
-            // the marker can be read against the line and not just against the axis.
-            // There is one per ride rather than one for the panel: the axis is
-            // distance, so the rides are at different distances, and a single line
-            // would have to mean one of them rather than all of them.
-            const playhead = svgEl('line', {
-                class: 'chart-playhead',
-                stroke: track.color,
-                'data-track-id': track.id,
-            });
-            profiles.append(line);
-            guides.append(playhead);
-            dots.append(dot);
-            drawn.push({
-                track,
-                points: [],
-                values: new Float64Array(0),
-                line,
-                dot,
-                playhead,
-                dotDistance: 0,
-                dotValue: 0,
-                dotX: 0,
-            });
-        }
+    /** One ride's line, dot and playhead guide, wired into their groups. */
+    const createDrawn = (track: Track): Drawn => {
+        // A <path>, not a <polyline>: a polyline is drawn from a `points`
+        // attribute, and a `d` set on one is ignored without complaint, so the
+        // element keeps the right class, the right colour, and a full set of
+        // path data, and still paints nothing at all.
+        const line = svgEl('path', {
+            class: 'chart-profile',
+            fill: 'none',
+            stroke: track.color,
+            'stroke-opacity': PROFILE_OPACITY,
+            'data-track-id': track.id,
+        });
+        const dot = svgEl('circle', {
+            class: 'chart-dot',
+            r: 3.5,
+            fill: track.color,
+            'data-track-id': track.id,
+        });
+        // A dashed guide down the plot at the distance this ride has reached, so
+        // the marker can be read against the line and not just against the axis.
+        // There is one per ride rather than one for the panel: the axis is
+        // distance, so the rides are at different distances, and a single line
+        // would have to mean one of them rather than all of them.
+        const playhead = svgEl('line', {
+            class: 'chart-playhead',
+            stroke: track.color,
+            'data-track-id': track.id,
+        });
+        profiles.append(line);
+        guides.append(playhead);
+        dots.append(dot);
+        return {
+            track,
+            points: [],
+            values: new Float64Array(0),
+            line,
+            dot,
+            playhead,
+            dotDistance: 0,
+            dotValue: 0,
+            dotX: 0,
+        };
+    };
 
-        // The placeholder is the *empty* state, so it shows only when there is
-        // nothing to plot. It is also given no box of its own, so leaving it in
-        // while a chart is drawn would push the plot down and squash it.
+    /** The placeholder is the *empty* state, so it shows only when there is
+     *  nothing to plot. It is also given no box of its own, so leaving it in
+     *  while a chart is drawn would push the plot down and squash it. */
+    const updatePlaceholder = (): void => {
         allHidden = states.length > 0 && drawn.length === 0;
         placeholder = allHidden ? ALL_HIDDEN : 'The chart appears once a run is loaded.';
         empty.textContent = placeholder;
@@ -383,6 +385,15 @@ export function createChart(
         setHidden(svg, drawn.length === 0);
         setHidden(controls, drawn.length === 0);
         describe(drawn.length, allHidden);
+    };
+
+    const render = (next: TrackState[]): void => {
+        states = next;
+        clearOverlays();
+        for (const { track } of states.filter(({ visible: shown }) => shown)) {
+            drawn.push(createDrawn(track));
+        }
+        updatePlaceholder();
 
         if (drawn.length === 0) {
             xMax = 0;
@@ -405,6 +416,34 @@ export function createChart(
         layout();
     };
 
+    /** Draw one ride's marker for a playhead, in the SVG's own pixel axes. */
+    const updateEntry = (entry: Drawn, p: ReturnType<typeof plot>, elapsedMs: number): void => {
+        const position = positionAt(entry.track, elapsedMs);
+        const distanceM = distanceAt(entry.track, position);
+        // Read the ride's own value at the playhead rather than looking it up by
+        // distance. The two agree except across a recorded stop, where the
+        // distance stops changing but the value does not.
+        //
+        // Plotted against distance, a stop is a vertical drop — the same distance
+        // with the speed arriving above it and standing still below. A distance
+        // lookup can only find the first of those two points, so a stopped
+        // ride's dot would hang in the air at the speed it had on the way in.
+        // Reading by time puts it at the foot of the drop, which is where the
+        // line actually says the ride is.
+        const value = valueAtTime(entry.values, position.index, position.fraction);
+        const x = scaleX(distanceM);
+        const y = scaleY(value);
+        entry.dotDistance = distanceM;
+        entry.dotValue = value;
+        entry.dotX = x;
+        entry.dot.setAttribute('cx', x.toFixed(1));
+        entry.dot.setAttribute('cy', y.toFixed(1));
+        entry.playhead.setAttribute('x1', x.toFixed(1));
+        entry.playhead.setAttribute('y1', String(p.top));
+        entry.playhead.setAttribute('x2', x.toFixed(1));
+        entry.playhead.setAttribute('y2', String(p.top + p.height));
+    };
+
     const update = (elapsedMs: number): void => {
         lastElapsedMs = elapsedMs;
         if (drawn.length === 0) {
@@ -412,30 +451,7 @@ export function createChart(
         }
         const p = plot();
         for (const entry of drawn) {
-            const position = positionAt(entry.track, elapsedMs);
-            const distanceM = distanceAt(entry.track, position);
-            // Read the ride's own value at the playhead rather than looking it up by
-            // distance. The two agree except across a recorded stop, where the
-            // distance stops changing but the value does not.
-            //
-            // Plotted against distance, a stop is a vertical drop — the same distance
-            // with the speed arriving above it and standing still below. A distance
-            // lookup can only find the first of those two points, so a stopped
-            // ride's dot would hang in the air at the speed it had on the way in.
-            // Reading by time puts it at the foot of the drop, which is where the
-            // line actually says the ride is.
-            const value = valueAtTime(entry.values, position.index, position.fraction);
-            const x = scaleX(distanceM);
-            const y = scaleY(value);
-            entry.dotDistance = distanceM;
-            entry.dotValue = value;
-            entry.dotX = x;
-            entry.dot.setAttribute('cx', x.toFixed(1));
-            entry.dot.setAttribute('cy', y.toFixed(1));
-            entry.playhead.setAttribute('x1', x.toFixed(1));
-            entry.playhead.setAttribute('y1', String(p.top));
-            entry.playhead.setAttribute('x2', x.toFixed(1));
-            entry.playhead.setAttribute('y2', String(p.top + p.height));
+            updateEntry(entry, p, elapsedMs);
         }
     };
 
@@ -453,6 +469,24 @@ export function createChart(
         }
         rescale();
         layout();
+    };
+
+    /** The drawn ride whose line is closest to a data point, or null if none plottable. */
+    const nearestAt = (distanceM: number, y: number): Drawn | null => {
+        let nearest: Drawn | null = null;
+        let nearestGap = Infinity;
+        for (const entry of drawn) {
+            const value = valueAtDistance(entry.points, distanceM);
+            if (value === null) {
+                continue;
+            }
+            const gap = Math.abs(scaleY(value) - y);
+            if (gap < nearestGap) {
+                nearestGap = gap;
+                nearest = entry;
+            }
+        }
+        return nearest;
     };
 
     /**
@@ -476,20 +510,7 @@ export function createChart(
         const x = (event.clientX - box.left) * (width > 0 ? width / (box.width || 1) : 1);
         const y = (event.clientY - box.top) * (height > 0 ? height / (box.height || 1) : 1);
         const distanceM = unscaleX(x);
-
-        let nearest: Drawn | null = null;
-        let nearestGap = Infinity;
-        for (const entry of drawn) {
-            const value = valueAtDistance(entry.points, distanceM);
-            if (value === null) {
-                continue;
-            }
-            const gap = Math.abs(scaleY(value) - y);
-            if (gap < nearestGap) {
-                nearestGap = gap;
-                nearest = entry;
-            }
-        }
+        const nearest = nearestAt(distanceM, y);
         if (!nearest) {
             return;
         }
