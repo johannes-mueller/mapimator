@@ -128,6 +128,43 @@ function readLatLon(text: string, from: number, to: number): { lat: number; lon:
     return { lat, lon };
 }
 
+function isValidCoordinate(lat: number, lon: number): boolean {
+    return (
+        Number.isFinite(lat) &&
+        Number.isFinite(lon) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lon >= -180 &&
+        lon <= 180
+    );
+}
+
+/**
+ * Converts the `HH:MM[:SS[.FFF]][zone]` tail of an ISO timestamp into
+ * milliseconds since the "same day at 00:00 UTC" instant, applying a numeric
+ * zone offset. Returns null when the tail is not in that shape.
+ */
+function timeOfDayToMs(tail: string, dayStartMs: number): number | null {
+    const m = TIME_OF_DAY_RE.exec(tail);
+    if (!m) {
+        return null;
+    }
+    const hours = Number(m[1]);
+    const minutes = Number(m[2]);
+    const seconds = m[3] === undefined ? 0 : Number(m[3]);
+    const frac = m[4] === undefined ? 0 : Number(`0.${m[4]}`);
+    let ms = dayStartMs + (hours * 3600 + minutes * 60 + seconds + frac) * 1000;
+
+    const zone = m[5];
+    if (zone && zone.toUpperCase() !== 'Z') {
+        const sign = zone.startsWith('-') ? 1 : -1;
+        const digits = zone.slice(1).replace(':', '');
+        const offsetMin = Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4));
+        ms += sign * offsetMin * 60_000;
+    }
+    return ms;
+}
+
 /**
  * Builds a time parser that caches the date portion. Every point in a track
  * normally shares the same `YYYY-MM-DD`, so parsing that part once instead of
@@ -151,24 +188,8 @@ function createTimeParser(): (value: string) => number {
             return Date.parse(value);
         }
 
-        const m = TIME_OF_DAY_RE.exec(value.slice(tIndex + 1));
-        if (!m) {
-            return Date.parse(value);
-        }
-        const hours = Number(m[1]);
-        const minutes = Number(m[2]);
-        const seconds = m[3] === undefined ? 0 : Number(m[3]);
-        const frac = m[4] === undefined ? 0 : Number(`0.${m[4]}`);
-        let ms = cachedBase + (hours * 3600 + minutes * 60 + seconds + frac) * 1000;
-
-        const zone = m[5];
-        if (zone && zone.toUpperCase() !== 'Z') {
-            const sign = zone.startsWith('-') ? 1 : -1;
-            const digits = zone.slice(1).replace(':', '');
-            const offsetMin = Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4));
-            ms += sign * offsetMin * 60_000;
-        }
-        return ms;
+        const ms = timeOfDayToMs(value.slice(tIndex + 1), cachedBase);
+        return ms === null ? Date.parse(value) : ms;
     };
 }
 
@@ -179,6 +200,132 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number): numb
         Math.sin(dLat / 2) ** 2 +
         Math.cos(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.sin(dLon / 2) ** 2;
     return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+interface TrackElementSpan {
+    /** Where the block content begins, just past the opening `>`. */
+    contentFrom: number;
+    /** Where the block content ends: the `</trk>` index, or end of file. */
+    end: number;
+    selfClosing: boolean;
+    /** Where scanning resumes after this element. */
+    next: number;
+}
+
+/** The text span of the next `<trk>` element, or null once none remains. */
+function nextTrackElement(text: string, from: number): TrackElementSpan | null {
+    const open = findTag(text, from, 'trk');
+    if (open < 0) {
+        return null;
+    }
+    const gt = text.indexOf('>', open);
+    if (gt < 0) {
+        return null;
+    }
+    const selfClosing = text.charAt(gt - 1) === '/';
+    const closeIdx = closeTagIndex(text, gt + 1, 'trk');
+    const end = closeIdx < 0 ? text.length : closeIdx;
+    return {
+        contentFrom: gt + 1,
+        end,
+        selfClosing,
+        next: closeIdx < 0 ? text.length : closeIdx + 6,
+    };
+}
+
+interface TrackPointSpan {
+    /** Index of the `<trkpt` opening tag, used to order segments. */
+    open: number;
+    /** Index of the `>` that closes the opening tag. */
+    tagEnd: number;
+    /** Where the element's content ends — never past the block's `to`. */
+    contentEnd: number;
+    /** Where scanning resumes after this element. */
+    next: number;
+}
+
+/**
+ * The span of the next `<trkpt>` at or after `pos`, or null once the block is
+ * exhausted. A point's content ends at its `</trkpt>` — or at the block end
+ * for a self-closing point, which has no closing tag of its own.
+ */
+function nextTrackPoint(text: string, pos: number, to: number): TrackPointSpan | null {
+    const open = findTag(text, pos, 'trkpt');
+    if (open < 0 || open >= to) {
+        return null;
+    }
+    const gt = text.indexOf('>', open);
+    if (gt < 0 || gt >= to) {
+        return null;
+    }
+
+    // A <trkpt> carrying no <ele> and no <time> is commonly written
+    // self-closing (`<trkpt lat=".." lon=".."/>`). Such an element has no
+    // `</trkpt>` of its own, so searching for one would run on to the *next*
+    // point and swallow it along with the rest of the file.
+    const selfClosing = text.charAt(gt - 1) === '/';
+    const closeIdx = selfClosing ? -1 : closeTagIndex(text, gt + 1, 'trkpt');
+    const contentEnd = closeIdx < 0 || closeIdx > to ? to : closeIdx;
+    return {
+        open,
+        tagEnd: gt,
+        contentEnd,
+        next: selfClosing ? gt + 1 : closeIdx < 0 ? to : closeIdx + 8,
+    };
+}
+
+/** Opening-tag indices of every `<trkseg>` in the block. */
+function findSegmentStartingIndices(text: string, from: number, to: number): number[] {
+    const indices: number[] = [];
+    for (
+        let s = findTag(text, from, 'trkseg');
+        s >= 0 && s < to;
+        s = findTag(text, s + 7, 'trkseg')
+    ) {
+        indices.push(s);
+    }
+    return indices;
+}
+
+/**
+ * Tracks which `<trkseg>` the scan is inside. Segment opening tags are visited
+ * in file order, so one pointer walks past every segment that starts before
+ * the current point; each new segment begun after points were already
+ * collected is recorded as a break.
+ */
+function createSegmentTracker(raw: RawTrack, segTagIdx: number[]): (pointOpen: number) => void {
+    let segPtr = 0;
+    let segSeen = 0;
+    return (pointOpen: number): void => {
+        while (segPtr < segTagIdx.length && segTagIdx[segPtr] < pointOpen) {
+            segPtr += 1;
+        }
+        if (segPtr > segSeen) {
+            segSeen = segPtr;
+            if (raw.lat.length > 0) {
+                raw.segStarts.push(raw.lat.length);
+            }
+        }
+    };
+}
+
+/**
+ * Reads the `<ele>`/`<elevation>` and `<time>` children of a validated point.
+ * A missing child is recorded as NaN, exactly as the raw arrays store it.
+ */
+function readPointContent(
+    text: string,
+    from: number,
+    to: number,
+    parseTime: (value: string) => number,
+): { ele: number; timeMs: number } {
+    const eleText =
+        readTagValue(text, from, to, 'ele') ?? readTagValue(text, from, to, 'elevation');
+    const timeText = readTagValue(text, from, to, 'time');
+    return {
+        ele: eleText === null ? NaN : Number.parseFloat(eleText),
+        timeMs: timeText === null ? NaN : parseTime(timeText),
+    };
 }
 
 function parseTrackBlock(text: string, from: number, to: number, fallbackName: string): RawTrack {
@@ -192,69 +339,33 @@ function parseTrackBlock(text: string, from: number, to: number, fallbackName: s
         segStarts: [],
     };
 
-    const segTagIdx: number[] = [];
-    for (
-        let s = findTag(text, from, 'trkseg');
-        s >= 0 && s < to;
-        s = findTag(text, s + 7, 'trkseg')
-    ) {
-        segTagIdx.push(s);
-    }
-
+    const segmentStarts = findSegmentStartingIndices(text, from, to);
+    const noteSegment = createSegmentTracker(raw, segmentStarts);
     const parseTime = createTimeParser();
-    let segPtr = 0;
-    let segSeen = 0;
     let pos = from;
 
     for (;;) {
-        const trkptIdx = findTag(text, pos, 'trkpt');
-        if (trkptIdx < 0 || trkptIdx >= to) {
+        const point = nextTrackPoint(text, pos, to);
+        if (point === null) {
             break;
         }
-        const gt = text.indexOf('>', trkptIdx);
-        if (gt < 0 || gt >= to) {
-            break;
-        }
+        noteSegment(point.open);
 
-        while (segPtr < segTagIdx.length && segTagIdx[segPtr] < trkptIdx) {
-            segPtr += 1;
-        }
-        if (segPtr > segSeen) {
-            segSeen = segPtr;
-            if (raw.lat.length > 0) {
-                raw.segStarts.push(raw.lat.length);
-            }
-        }
-
-        // A <trkpt> carrying no <ele> and no <time> is commonly written
-        // self-closing (`<trkpt lat=".." lon=".."/>`). Such an element has no
-        // `</trkpt>` of its own, so searching for one would run on to the *next*
-        // point and swallow it along with the rest of the file.
-        const selfClosing = text.charAt(gt - 1) === '/';
-        const closeIdx = selfClosing ? -1 : closeTagIndex(text, gt + 1, 'trkpt');
-        const contentEnd = closeIdx < 0 || closeIdx > to ? to : closeIdx;
-        const { lat, lon } = readLatLon(text, trkptIdx + 6, gt);
-
-        if (
-            Number.isFinite(lat) &&
-            Number.isFinite(lon) &&
-            lat >= -90 &&
-            lat <= 90 &&
-            lon >= -180 &&
-            lon <= 180
-        ) {
-            const eleText =
-                readTagValue(text, gt + 1, contentEnd, 'ele') ??
-                readTagValue(text, gt + 1, contentEnd, 'elevation');
-            const timeText = readTagValue(text, gt + 1, contentEnd, 'time');
-
+        // The +6 skips the `<trkpt` tag name, so only the attributes are scanned.
+        const { lat, lon } = readLatLon(text, point.open + 6, point.tagEnd);
+        if (isValidCoordinate(lat, lon)) {
+            const { ele, timeMs } = readPointContent(
+                text,
+                point.tagEnd + 1,
+                point.contentEnd,
+                parseTime,
+            );
             raw.lat.push(lat);
             raw.lon.push(lon);
-            raw.ele.push(eleText === null ? NaN : Number.parseFloat(eleText));
-            raw.timeMs.push(timeText === null ? NaN : parseTime(timeText));
+            raw.ele.push(ele);
+            raw.timeMs.push(timeMs);
         }
-
-        pos = selfClosing ? gt + 1 : closeIdx < 0 ? to : closeIdx + 8;
+        pos = point.next;
     }
 
     if (raw.lat.length > 0) {
@@ -263,13 +374,22 @@ function parseTrackBlock(text: string, from: number, to: number, fallbackName: s
     return raw;
 }
 
-function finalizeTrack(raw: RawTrack, index: number, fileName: string): ParsedTrack {
+interface Geometry {
+    lat: Float64Array;
+    lon: Float64Array;
+    ele: Float32Array;
+    dist: Float32Array;
+    renderLine: number[];
+    bounds: Bounds;
+}
+
+/** Copies a parsed track into its typed arrays, adding distance and bounds. */
+function buildGeometry(raw: RawTrack): Geometry {
     const n = raw.lat.length;
     const lat = new Float64Array(n);
     const lon = new Float64Array(n);
     const ele = new Float32Array(n);
     const dist = new Float32Array(n);
-    const tRel = new Float64Array(n);
     const renderLine = new Array<number>(n * 2);
 
     let minLon = Infinity;
@@ -292,48 +412,65 @@ function finalizeTrack(raw: RawTrack, index: number, fileName: string): ParsedTr
         renderLine[i * 2] = lo;
         renderLine[i * 2 + 1] = la;
 
-        if (lo < minLon) {
-            minLon = lo;
-        }
-        if (lo > maxLon) {
-            maxLon = lo;
-        }
-        if (la < minLat) {
-            minLat = la;
-        }
-        if (la > maxLat) {
-            maxLat = la;
-        }
+        minLon = Math.min(minLon, lo);
+        maxLon = Math.max(maxLon, lo);
+        minLat = Math.min(minLat, la);
+        maxLat = Math.max(maxLat, la);
     }
 
-    const bounds: Bounds = { minLon, minLat, maxLon, maxLat };
+    return {
+        lat,
+        lon,
+        ele,
+        dist,
+        renderLine,
+        bounds: { minLon, minLat, maxLon, maxLat },
+    };
+}
 
-    let t0 = 0;
-    if (raw.hasTime) {
-        let first = raw.timeMs.findIndex((t) => Number.isFinite(t));
-        if (first < 0) {
-            first = 0;
-        }
-        t0 = raw.timeMs[first];
-        // Fill gaps left by points with no <time>, so a track is never
-        // non-monotonic just because a few points were unlogged.
-        for (let i = 1; i < n; i += 1) {
-            if (!Number.isFinite(raw.timeMs[i])) {
-                raw.timeMs[i] = raw.timeMs[i - 1];
-            }
-        }
-        for (let i = first - 1; i >= 0; i -= 1) {
-            raw.timeMs[i] = t0;
-        }
-        for (let i = 0; i < n; i += 1) {
-            tRel[i] = (raw.timeMs[i] - t0) / 1000;
-        }
-    } else {
+/**
+ * The per-point elapsed-time series and its origin. A timed run pins `t0` to
+ * the first real timestamp and fills the gaps left by points with no `<time>`
+ * (the fill mutates `raw.timeMs`); an untimed run gets a synthetic pace.
+ */
+function buildRelativeTimes(raw: RawTrack, dist: Float32Array): { t0: number; tRel: Float64Array } {
+    const n = raw.lat.length;
+    const tRel = new Float64Array(n);
+
+    if (!raw.hasTime) {
         for (let i = 0; i < n; i += 1) {
             tRel[i] = dist[i] / SYNTHETIC_PACE_MPS;
         }
+        return { t0: 0, tRel };
     }
 
+    const first = Math.max(
+        0,
+        raw.timeMs.findIndex((t) => Number.isFinite(t)),
+    );
+    const t0 = raw.timeMs[first];
+    // Fill gaps left by points with no <time>, so a track is never
+    // non-monotonic just because a few points were unlogged.
+    for (let i = 1; i < n; i += 1) {
+        if (!Number.isFinite(raw.timeMs[i])) {
+            raw.timeMs[i] = raw.timeMs[i - 1];
+        }
+    }
+    for (let i = first - 1; i >= 0; i -= 1) {
+        raw.timeMs[i] = t0;
+    }
+    for (let i = 0; i < n; i += 1) {
+        tRel[i] = (raw.timeMs[i] - t0) / 1000;
+    }
+    return { t0, tRel };
+}
+
+/**
+ * The indices where segments begin: a new `<trkseg>`, or a recorded gap longer
+ * than MAX_SEGMENT_GAP_MS between adjacent timed points. Index 0 is always
+ * removed, since a break at the very start cannot be drawn.
+ */
+function buildSegmentBreaks(raw: RawTrack, n: number): Uint32Array {
     const breaks = new Set<number>(raw.segStarts);
     if (raw.hasTime) {
         for (let i = 1; i < n; i += 1) {
@@ -343,7 +480,14 @@ function finalizeTrack(raw: RawTrack, index: number, fileName: string): ParsedTr
         }
     }
     breaks.delete(0);
-    const segmentBreaks = new Uint32Array([...breaks].sort((a, b) => a - b));
+    return new Uint32Array([...breaks].sort((a, b) => a - b));
+}
+
+function finalizeTrack(raw: RawTrack, index: number, fileName: string): ParsedTrack {
+    const n = raw.lat.length;
+    const { lat, lon, ele, dist, renderLine, bounds } = buildGeometry(raw);
+    const { t0, tRel } = buildRelativeTimes(raw, dist);
+    const segmentBreaks = buildSegmentBreaks(raw, n);
 
     const name = raw.name.trim() === '' ? `${fileName} #${index + 1}` : raw.name.trim();
 
@@ -375,26 +519,17 @@ export function parseGpx(text: string, fileName: string): ParsedTrack[] {
     let cursor = 0;
 
     for (;;) {
-        const open = findTag(text, cursor, 'trk');
-        if (open < 0) {
+        const element = nextTrackElement(text, cursor);
+        if (element === null) {
             break;
         }
-        const gt = text.indexOf('>', open);
-        if (gt < 0) {
-            break;
-        }
-        const selfClosing = text.charAt(gt - 1) === '/';
-        const closeIdx = closeTagIndex(text, gt + 1, 'trk');
-        const end = closeIdx < 0 ? text.length : closeIdx;
-
-        if (!selfClosing) {
-            const raw = parseTrackBlock(text, gt + 1, end, fileName);
+        if (!element.selfClosing) {
+            const raw = parseTrackBlock(text, element.contentFrom, element.end, fileName);
             if (raw.lat.length > 0) {
                 out.push(finalizeTrack(raw, out.length, fileName));
             }
         }
-
-        cursor = closeIdx < 0 ? text.length : closeIdx + 6;
+        cursor = element.next;
     }
 
     if (out.length === 0) {
