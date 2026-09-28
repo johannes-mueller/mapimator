@@ -28,6 +28,7 @@ export async function run({ page, suite, errors, url }) {
             'map',
             'topbar',
             'basemap-switcher',
+            'github-link',
             'sidebar',
             'dropzone',
             'file-input',
@@ -39,6 +40,7 @@ export async function run({ page, suite, errors, url }) {
             'timeline',
             'clock',
         ];
+        const link = document.getElementById('github-link');
         return {
             missing: ids.filter((id) => !document.getElementById(id)),
             buttons: [...document.querySelectorAll('#basemap-switcher button')].map(
@@ -54,6 +56,13 @@ export async function run({ page, suite, errors, url }) {
                 document.getElementById('speed-select').disabled,
                 document.getElementById('timeline').disabled,
             ],
+            githubLink: {
+                href: link?.getAttribute('href'),
+                target: link?.getAttribute('target'),
+                rel: link?.getAttribute('rel'),
+                label: link?.getAttribute('aria-label'),
+                iconHidden: link?.querySelector('svg')?.getAttribute('aria-hidden'),
+            },
         };
     });
 
@@ -79,6 +88,20 @@ export async function run({ page, suite, errors, url }) {
         'playback controls disabled with no tracks',
         shell.controlsDisabled.every(Boolean),
         JSON.stringify(shell.controlsDisabled),
+    );
+    // A real address, not a placeholder, and opened without handing the new tab
+    // a `window.opener` back into this one.
+    suite.check(
+        'the GitHub link points at the real repo, opened safely in a new tab',
+        shell.githubLink.href === 'https://github.com/johannes-mueller/mapimator' &&
+            shell.githubLink.target === '_blank' &&
+            shell.githubLink.rel === 'noopener noreferrer',
+        JSON.stringify(shell.githubLink),
+    );
+    suite.check(
+        'and it has a name a screen reader can announce, since the icon alone has none',
+        shell.githubLink.label === 'Mapimator on GitHub' && shell.githubLink.iconHidden === 'true',
+        JSON.stringify(shell.githubLink),
     );
 
     const cam0 = await page.evaluate(() => {
