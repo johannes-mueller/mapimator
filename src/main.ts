@@ -173,6 +173,65 @@ const dropzone = createDropzone({
 
 let loadInFlight = false;
 
+interface LoadSummary {
+    addedCount: number;
+    failures: string[];
+}
+
+type FileOutcome = { fileName: string; added: number } | { fileName: string; error: string };
+
+/** Load one file into the store; the count added, or the message to report. */
+async function addFile(file: File): Promise<FileOutcome> {
+    try {
+        const result = await parser.parseFile(file);
+        const wasEmpty = store.getAll().length === 0;
+        const added = store.add(result.tracks);
+        for (const track of added) {
+            applyTerrain(track.id, track);
+        }
+        if (wasEmpty) {
+            const bounds = store.getCombinedBounds();
+            if (bounds) {
+                fitTracksInView(view.map, bounds);
+            }
+        }
+        return { fileName: file.name, added: result.tracks.length };
+    } catch (error) {
+        return {
+            fileName: file.name,
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+/** Load every file, splitting the outcomes into the tally and the failures. */
+async function addFiles(files: File[]): Promise<LoadSummary> {
+    const summary: LoadSummary = { addedCount: 0, failures: [] };
+    for (const file of files) {
+        const outcome = await addFile(file);
+        if ('error' in outcome) {
+            summary.failures.push(`${outcome.fileName}: ${outcome.error}`);
+        } else {
+            summary.addedCount += outcome.added;
+        }
+    }
+    return summary;
+}
+
+/** The one status line a load ends with: the failed files, or the count loaded. */
+function reportLoad({ failures, addedCount }: LoadSummary): void {
+    if (failures.length > 0) {
+        dropzone.setStatus(
+            failures.length === 1 ? failures[0] : `${failures.length} files failed to parse.`,
+            'error',
+        );
+        return;
+    }
+    if (addedCount > 0) {
+        dropzone.setStatus(`Loaded ${addedCount} ${addedCount === 1 ? 'run' : 'runs'}.`, 'info');
+    }
+}
+
 async function loadFiles(files: File[]): Promise<void> {
     if (loadInFlight || files.length === 0) {
         dropzone.setStatus(
@@ -188,44 +247,14 @@ async function loadFiles(files: File[]): Promise<void> {
     dropzone.setBusy(true);
     dropzone.setStatus(null, 'info');
 
-    let addedCount = 0;
-    const failures: string[] = [];
-
+    let summary: LoadSummary = { addedCount: 0, failures: [] };
     try {
-        for (const file of files) {
-            try {
-                const result = await parser.parseFile(file);
-                const wasEmpty = store.getAll().length === 0;
-                const added = store.add(result.tracks);
-                for (const track of added) {
-                    applyTerrain(track.id, track);
-                }
-                addedCount += result.tracks.length;
-                if (wasEmpty) {
-                    const bounds = store.getCombinedBounds();
-                    if (bounds) {
-                        fitTracksInView(view.map, bounds);
-                    }
-                }
-            } catch (error) {
-                failures.push(
-                    `${file.name}: ${error instanceof Error ? error.message : String(error)}`,
-                );
-            }
-        }
+        summary = await addFiles(files);
     } finally {
         loadInFlight = false;
         dropzone.setBusy(false);
     }
-
-    if (failures.length > 0) {
-        dropzone.setStatus(
-            failures.length === 1 ? failures[0] : `${failures.length} files failed to parse.`,
-            'error',
-        );
-    } else if (addedCount > 0) {
-        dropzone.setStatus(`Loaded ${addedCount} ${addedCount === 1 ? 'run' : 'runs'}.`, 'info');
-    }
+    reportLoad(summary);
 }
 
 const redraw = (): void => {
