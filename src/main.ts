@@ -13,6 +13,7 @@ import { createTerrainSource } from './terrain/demClient';
 import { createChart } from './ui/chart';
 import type { ChartHandle } from './ui/chart';
 import { createLegend } from './ui/legend';
+import { createAboutDialog } from './ui/about';
 import { createTransport } from './ui/transport';
 import type { TransportHandle } from './ui/transport';
 import { readoutText } from './playback/readout';
@@ -154,6 +155,12 @@ const legend = createLegend(
 transport.subscribe(() => {
     legend.updateReadouts();
     chart.update(transport.getElapsedMs());
+});
+
+createAboutDialog({
+    button: requireButton('about-button'),
+    dialog: requireElement<HTMLDialogElement>('about-dialog'),
+    closeButton: requireButton('about-close'),
 });
 
 const dropzone = createDropzone({

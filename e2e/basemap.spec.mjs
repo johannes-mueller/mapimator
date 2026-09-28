@@ -28,6 +28,8 @@ export async function run({ page, suite, errors, url }) {
             'map',
             'topbar',
             'basemap-switcher',
+            'about-button',
+            'about-dialog',
             'github-link',
             'sidebar',
             'dropzone',
@@ -41,6 +43,7 @@ export async function run({ page, suite, errors, url }) {
             'clock',
         ];
         const link = document.getElementById('github-link');
+        const order = [...document.getElementById('topbar').children].map((el) => el.id);
         return {
             missing: ids.filter((id) => !document.getElementById(id)),
             buttons: [...document.querySelectorAll('#basemap-switcher button')].map(
@@ -63,6 +66,7 @@ export async function run({ page, suite, errors, url }) {
                 label: link?.getAttribute('aria-label'),
                 iconHidden: link?.querySelector('svg')?.getAttribute('aria-hidden'),
             },
+            topbarOrder: order,
         };
     });
 
@@ -102,6 +106,13 @@ export async function run({ page, suite, errors, url }) {
         'and it has a name a screen reader can announce, since the icon alone has none',
         shell.githubLink.label === 'Mapimator on GitHub' && shell.githubLink.iconHidden === 'true',
         JSON.stringify(shell.githubLink),
+    );
+    const order = shell.topbarOrder;
+    suite.check(
+        'the About button sits to the left of the GitHub link',
+        order.indexOf('about-button') !== -1 &&
+            order.indexOf('about-button') < order.indexOf('github-link'),
+        order.join('>'),
     );
 
     const cam0 = await page.evaluate(() => {

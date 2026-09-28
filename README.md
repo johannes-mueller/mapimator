@@ -68,7 +68,7 @@ There are two layers, and they answer different questions.
 
 **Unit tests** (`npm test`) cover the logic that has no business being tested through a browser: the basemap table and `localStorage` fallback, the GPX scanner, the decoding fallback, the store's subscriptions, segment splitting, the E2E harness itself, the chart's profile building, decimation, distance inversion, and one-unit axis labels, and formatting. They run in a Node environment with no DOM and need no network, so they are fast — the whole suite takes under a second.
 
-**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that the follow camera brings a run back into view and a real drag on the map actually suspends it, that a recorded pause parks the marker instead of gliding it across the gap, that a clicked chart really seeks the run, and that `dist/` really works from a subpath. It also charts a 60,000-point file, so a profile too long to draw point for point is exercised in a real browser. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
+**End-to-end checks** (`npm run test:e2e`) drive the real built app in a real browser. They verify the things only a browser can: that the basemap styles really paint differently, that overlay layers survive a `setStyle()` switch, that a polyline and a moving marker actually change pixels on the map, that the follow camera brings a run back into view and a real drag on the map actually suspends it, that a recorded pause parks the marker instead of gliding it across the gap, that a clicked chart really seeks the run, that the About overlay opens and announces itself as a modal and closes by the ×, Escape, or a click outside, and that `dist/` really works from a subpath. It also charts a 60,000-point file, so a profile too long to draw point for point is exercised in a real browser. The suite serves `dist/` on a free port, writes its GPX fixtures to the OS temp directory, and takes no arguments.
 
 The E2E suite needs **live network access to `tiles.openfreemap.org`** — it renders the real styles and the real tiles, because a recorded snapshot would test the recording rather than the app. It preflights that endpoint before launching a browser, so a connectivity problem reports itself as an environment problem instead of a 30-second timeout:
 
@@ -181,6 +181,7 @@ src/
     profile.ts                the metric against distance, decimation, inverses
     profile.test.ts
   ui/
+    about.ts                  the About overlay: open, close, backdrop click
     basemapSwitcher.ts        basemap buttons
     dropzone.ts               drag-and-drop, file picker, parse status
     legend.ts                 run list, visibility toggles
@@ -196,6 +197,7 @@ e2e/
   harness.test.mjs            the harness's own logic, under unit test
   make-fixtures.mjs           GPX fixtures, written only when a spec asks for them
   basemap.spec.mjs            shell, basemap switching, overlays, persistence
+  about.spec.mjs              the About overlay: open, content, close paths
   subpath.spec.mjs            dist/ served from a subpath, as a project site is
   tracks.spec.mjs             parsing, geometry, gaps, errors, large file
   playback.spec.mjs           the shared clock, markers, play/pause, gap parking

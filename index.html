@@ -16,6 +16,7 @@
         <header id="topbar">
             <h1 class="wordmark">Mapimator</h1>
             <nav id="basemap-switcher" aria-label="Basemap"></nav>
+            <button id="about-button" type="button">About</button>
             <a
                 id="github-link"
                 href="https://github.com/johannes-mueller/mapimator"
@@ -84,6 +85,33 @@
                 aria-label="Playback position"
             />
         </footer>
+
+        <dialog id="about-dialog" aria-modal="true" aria-labelledby="about-title">
+            <div class="about-head">
+                <h2 id="about-title">About Mapimator</h2>
+                <button id="about-close" type="button" aria-label="Close">&times;</button>
+            </div>
+            <p>
+                Mapimator animates multiple GPX runs at the same time, on a shared clock, over a
+                switchable OpenStreetMap basemap. Each run is measured from its own first timestamp,
+                so repeat runs of the same course can be compared side by side at every instant.
+            </p>
+            <p>
+                Your GPX files are parsed entirely in your browser and never uploaded anywhere — the
+                only thing that leaves your machine is a request to the elevation tile host, to read
+                the ground's height along each run.
+            </p>
+            <ul>
+                <li>Five switchable basemaps: Liberty, Positron, Bright, Fiord, and Dark</li>
+                <li>
+                    Playback from 1&times; to 300&times;, with a scrubbable timeline and full
+                    keyboard control
+                </li>
+                <li>A legend that can hide or remove individual runs</li>
+                <li>An elevation and speed chart per run, drawn from a terrain model</li>
+                <li>A camera that follows a played run until you take over</li>
+            </ul>
+        </dialog>
 
         <script type="module" src="/src/main.ts"></script>
     </body>
