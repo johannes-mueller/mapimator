@@ -16,6 +16,28 @@ export const fixtures = [];
  * built `dist/` under a prefix and refuses to answer outside it. A regression to
  * `base: '/'` turns every asset into a 404 and this spec goes red.
  */
+/**
+ * Wait for the map region to actually be painted in the new style's colours.
+ *
+ * areTilesLoaded() can report true while setStyle is still swapping sources —
+ * the trap the tracks suite's basemap section calls out too — so a fixed wait
+ * after it is a guess at the runner's speed. A busy shared runner once captured
+ * a frame before the Dark style's tiles had painted at all (luma 12, one flat
+ * colour). Polling the pixels waits for the observable instead, and the check
+ * below still fails when painting never lands.
+ */
+const painted = async (page, label) => {
+    const deadline = Date.now() + 15_000;
+    const ready = (after) =>
+        after.exactColors > 50 && (label === 'Dark' ? after.meanLuma < 80 : after.meanLuma > 80);
+    let after = await analyzeRegion(page, MAP_REGION);
+    while (!ready(after) && Date.now() < deadline) {
+        await page.waitForTimeout(500);
+        after = await analyzeRegion(page, MAP_REGION);
+    }
+    return after;
+};
+
 export async function run({ page, suite, errors, root }) {
     suite.section('BUILT ASSET URLS');
     const html = await readFile(join(root, 'dist', 'index.html'), 'utf8');
@@ -126,8 +148,7 @@ export async function run({ page, suite, errors, root }) {
             await page.waitForFunction(() => window.mapimator.map.areTilesLoaded(), null, {
                 timeout: 30_000,
             });
-            await page.waitForTimeout(800);
-            const after = await analyzeRegion(page, MAP_REGION);
+            const after = await painted(page, label);
             suite.check(
                 `${label} painted from the subpath`,
                 after.exactColors > 50 &&
